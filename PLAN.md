@@ -4,7 +4,9 @@ v2 replaces v1 after the 2026-09-27 scope interview. The Decision log at the end
 
 Two deliverables. A capture program that attaches to a Chromium browser over CDP and continuously writes a React render event log to Parquet, and a Claude Code skill that queries that log with DuckDB, finds expensive commits, explains them, and either proposes and applies a fix or bails with a named reason.
 
-Not in v1. No A/B framework, no baseline service, no profiling or production builds, no React DevTools extension on the captured page, no out-of-process iframes or workers.
+Not in v1. No A/B framework, no baseline service, no profiling or production builds, no out-of-process iframes or workers.
+
+Not a goal at all: running next to the React DevTools extension. react-log is meant to replace it for this workflow, so a captured page runs without it.
 
 ## Scope, locked
 
@@ -40,7 +42,7 @@ Adapter for 19.2 and later: React's own Performance Track calls. The shim wraps 
 2. A `console.createTask` wrapper records update_enqueued with a capped stack when React names an update method: `setState()`, `dispatch()`, `updateSyncExternalStore()`, `refresh()`, `setOptimistic()`, `root.render()`, and the class variants. React calls it for the first update of each batch, which is the trigger the signature needs. React also calls it once per JSX element, so every other call returns after one string check.
 3. Effect spans are mapped to fibers through the fiber's `_debugTask`, with component name and tree order as the fallback.
 
-Hook install. If the capture program finds the React DevTools extension among the browser's targets, or a `__REACT_DEVTOOLS_GLOBAL_HOOK__` already exists when the shim runs, capture stops with an error that names the cause. A shim hook installed first would otherwise silently break the extension. The shim's hook implements exactly what React calls: `supportsFiber`, `inject`, `isDisabled`, `checkDCE`, `onScheduleFiberRoot`, `onCommitFiberRoot`, `onPostCommitFiberRoot`, `onCommitFiberUnmount`, `setStrictMode`.
+Hook install. If the capture program finds the React DevTools extension among the browser's targets, or a `__REACT_DEVTOOLS_GLOBAL_HOOK__` already exists when the shim runs, capture stops with an error that names the cause and says to disable the extension in the capture profile. Running both would leave the extension half-working. The shim's hook implements exactly what React calls: `supportsFiber`, `inject`, `isDisabled`, `checkDCE`, `onScheduleFiberRoot`, `onCommitFiberRoot`, `onPostCommitFiberRoot`, `onCommitFiberUnmount`, `setStrictMode`.
 
 Why-data, computed in idle slices from the kept references:
 1. `reason_code` is the first match in this order: mount (no alternate), retry (Suspense retry), force, context, hooks (a stateful hook changed, function components), state (class state changed), props (a prop changed by Object.is), parent (a new props object whose every key is equal, so memo would have skipped the render), unknown.
@@ -210,21 +212,20 @@ Acceptance. A capture left running for at least an hour in the cloud session aga
 
 ## Later, not in this plan
 
-1. React DevTools extension on the same page: wrap the extension's hook instead of refusing.
-2. Profiling builds, then the production path with sampling and build-time names.
-3. Every update's call site on 19.2+, not only the first of each batch.
-4. Out-of-process iframes and workers.
-5. Baseline store and history gates (same signature last week).
-6. CDP trace join for style, layout and paint per commit.
-7. Concurrency model for concurrent roots.
-8. React Compiler diagnostics on flagged components.
+1. Profiling builds, then the production path with sampling and build-time names.
+2. Every update's call site on 19.2+, not only the first of each batch.
+3. Out-of-process iframes and workers.
+4. Baseline store and history gates (same signature last week).
+5. CDP trace join for style, layout and paint per commit.
+6. Concurrency model for concurrent roots.
+7. React Compiler diagnostics on flagged components.
 
 ## Decision log
 
 2026-09-27, scope interview. Evidence came from the react-dom npm builds 18.0.0 through 19.3.0, the React DevTools source, and experiments in headless Chromium in the cloud session.
 
 1. React 19.2 removed `injectProfilingHooks`: present through 19.1.9, absent in 19.2.0, 19.2.8 and 19.3.0. The shim moved to a commit-walk core with per-line adapters, rather than degrading on 19.2+ or patching React's hook dispatcher.
-2. A hook installed by the shim first silently disables the React DevTools extension, which skips its own install and then calls methods a minimal hook lacks. Coexistence moved to Later; capture refuses instead.
+2. A hook installed by the shim first silently disables the React DevTools extension, which skips its own install and then calls methods a minimal hook lacks. Coexistence is a non-goal, not deferred: react-log is meant to replace the extension for this workflow (owner's call). Capture refuses when the extension is present, so the extension never half-works.
 3. `performance.now()` ticks at 100 µs without cross-origin isolation and at 5 µs with it. The fixture is served isolated, and `--isolate` is opt-in elsewhere.
 4. v1's context check compared against the context's current value, which is wrong once render has finished. It now uses React DevTools' previous-versus-next dependency comparison.
 5. Target is an in-repo fixture, runtime is CDP only and validated in the cloud session, builds are dev only, interactions come from Event Timing plus mark pairs, and the overhead bar is 5% at p50 and p95. The React DevTools clause left success criterion 1.
