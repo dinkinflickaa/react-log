@@ -64,6 +64,7 @@ node bench/overhead.ts             # shim vs an empty DevTools hook (gated) and 
 node bench/soak.ts --minutes 60    # capture under scripted load: rows grow, memory flat, nothing dropped
 node bench/buckets.ts <session dir> # every measure's time buckets, recomputed in SQL from its events
 node bench/card.ts                 # react-log card on a synthetic five-million-row session: under 1 s
+node bench/record.ts --out <dir>   # the lab under scripted load: each planted bug's button, 20 rounds
 ```
 
 ## Layout
