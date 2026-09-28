@@ -6,7 +6,7 @@ import { createContext, memo, useCallback, useContext, useLayoutEffect, useRef, 
 //   #bench-small   SmallPanel     ~50 components, all commit
 //   #bench-medium  MediumTable    ~500 rows, reordered
 //   #bench-large   LargeList      ~3,000 items, nearly all no-op
-//   #bug-producer  Sidebar        ~3,000 items, nearly all no-op  (stabilize_producer)
+//   #bug-producer  Sidebar        ~3,000 items, 2 re-render       (stabilize_producer, fixed in Phase 5)
 //   #bug-context   ShellProvider  200 context consumers, no-op    (narrow_input)
 //   #bug-memo      Dashboard      300-bar chart re-renders, no-op (memo_boundary)
 //   #bug-hoist     Report         heavy computation in render     (hoist_render_work)
@@ -155,9 +155,11 @@ function LargeList() {
   );
 }
 
-// ---- stabilize_producer: every item is memoized, but the inline onSelect is
-// a new function on each render, so all 3,000 re-render and only the two
-// whose selection changed commit anything.
+// ---- stabilize_producer, fixed by the react-log skill in Phase 5: every
+// item is memoized, and onSelect is now created once, so only the two items
+// whose selection changed re-render. Before the fix, the inline onSelect was
+// a new function on each render and all 3,000 re-rendered (LargeList above
+// still does).
 
 const SidebarItem = memo(function SidebarItem({ item, selected, onSelect }) {
   return (
