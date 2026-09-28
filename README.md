@@ -33,13 +33,26 @@ pnpm exec react-log watch SidebarItem
 duckdb -c "SELECT kind, count(*) FROM read_parquet('segments/*/seg-*.parquet') GROUP BY 1"
 ```
 
-Each browser tab is a session under `segments/<session_id>/`, with `session.json` and Parquet files that rotate every 10 seconds. The React DevTools extension must be off in the capture profile. `react-log.config.json` holds the defaults.
+Each browser tab is a session under `segments/<session_id>/`, with `session.json` and Parquet files that rotate every 10 seconds: `seg` (every event), `defs` (components), `commits` (one rollup row per commit) and `measures` (one row per interaction or configured mark pair). Capture links every row to the chain of updates that caused it (`root_update_id`) and stamps the rows inside a measure (`measure_instance_id`, `on_critical_path`). A new tab opened while capture runs is recorded too. The React DevTools extension must be off in the capture profile. `react-log.config.json` holds the defaults.
+
+## Reading a session
+
+```sh
+pnpm exec react-log sessions                     # newest first
+pnpm exec react-log top [--session <id>] [--measure click] [--limit 20]
+pnpm exec react-log card <commit_id>             # cause, extent, self cost, effects, cause chain
+pnpm exec react-log query "SELECT name, count(*), median(duration_ms) FROM measures GROUP BY 1"
+```
+
+`query` runs DuckDB with four views loaded, over all sessions or one (`--session`): `events`, `defs`, `commits` and `measures`. `--json` and `--csv` change the output format.
 
 ## Benchmarks
 
 ```sh
 node bench/overhead.ts             # shim vs an empty DevTools hook (gated) and vs no hook, React 18.3.1 and 19.3.0 (about 30 min)
 node bench/soak.ts --minutes 60    # capture under scripted load: rows grow, memory flat, nothing dropped
+node bench/buckets.ts <session dir> # every measure's time buckets, recomputed in SQL from its events
+node bench/card.ts                 # react-log card on a synthetic five-million-row session: under 1 s
 ```
 
 ## Layout
@@ -48,9 +61,9 @@ node bench/soak.ts --minutes 60    # capture under scripted load: rows grow, mem
 packages/shim        browser IIFE injected before any page script (pnpm build)
 packages/capture     CDP client, ingest, chain linker, rollups, segment writer
 packages/cli         react-log binary
-fixture/app          demo app, plain JSX
+fixture/app          demo app, plain JSX: the lab (benchmark interactions and planted bugs) and the chains page (what the chain linker connects)
 fixture/versions     one package per React version in the test matrix
 skills/react-log/    the Claude Code skill
-bench/               overhead benchmark and soak test, headless Chromium
+bench/               overhead benchmark, soak test and Phase 3 acceptance checks
 tests/               vitest suites
 ```

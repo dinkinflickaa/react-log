@@ -76,8 +76,10 @@ export const SCHEMAS: Record<Family, [name: string, type: string][]> = {
     ['ts_end_marker', 'BIGINT'],
     ['ts_end_paint', 'BIGINT'],
     ['ts_end_idle', 'BIGINT'],
-    // [ts_start, ts_end_paint] (Event Timing) or [ts_start, ts_end_marker]
-    // (marks), split three ways: on-path work, interference, waiting.
+    // The window's length, split three ways: on-path work, interference and
+    // waiting. An interaction's window is the union of its entries' windows
+    // (each input to the paint after its handlers); a mark pair's runs
+    // between its marks.
     ['duration_ms', 'DOUBLE'],
     ['on_path_ms', 'DOUBLE'],
     ['interference_ms', 'DOUBLE'],

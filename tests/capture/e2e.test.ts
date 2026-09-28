@@ -2,12 +2,13 @@ import type { ChildProcess } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import type { Server } from 'node:http';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { startFixtureServer } from '../../fixture/serve.ts';
 import { captureEndpoint, watch } from '../../packages/capture/src/watch.ts';
+import { cardText, querySql, sessionsText, topText } from '../../packages/cli/src/report.ts';
 import { bucketProblems, recomputeBuckets } from '../../bench/buckets.ts';
-import { attachTab, type CaptureRun, serveInChild, sleep, sql, withCapture } from './harness.ts';
+import { attachTab, type CaptureRun, duckdb, serveInChild, sleep, sql, withCapture } from './harness.ts';
 
 // react-log capture end to end on the lab (harness.ts), then the Parquet
 // segments checked.
@@ -146,6 +147,28 @@ describe.each(['19.3.0', '18.3.1'])('capture against the lab on React %s', (vers
     expect(unlinked).toBe(0);
     const [{ orphans }] = sql(`SELECT count(*) AS orphans FROM ${seg} WHERE commit_id IS NOT NULL AND root_update_id IS NULL`);
     expect(orphans).toBe(0);
+  });
+
+  test('react-log sessions, top, card and query read the session', () => {
+    const segments = dirname(dir);
+    const session = basename(dir);
+    expect(sessionsText(segments)).toContain(session);
+    const [sidebar] = sql<{ commit_id: string }>(
+      `SELECT commit_id FROM read_parquet('${dir}/commits-*.parquet') WHERE top_type = 'SidebarItem' AND trigger_event = 'click' ORDER BY total_ms DESC LIMIT 1`,
+    );
+    const top = topText(duckdb, segments, session, { limit: 5 });
+    expect(top.split('\n').length).toBeLessThanOrEqual(12);
+    expect(top).toContain(sidebar!.commit_id);
+    const card = cardText(duckdb, segments, sidebar!.commit_id);
+    expect(card.trimEnd().split('\n').length).toBeLessThanOrEqual(60);
+    expect(card).toMatch(/^cause click -> Sidebar at onClick \(lab\/Lab\.jsx:\d+:\d+\)$/m);
+    expect(card).toMatch(/top type SidebarItem x3,000/);
+    // SidebarItem was watched: the card says which prop changed, and how.
+    expect(card).toMatch(/^ {2}SidebarItem +lab\/Lab\.jsx:148 +3,000 .* props +onSelect:identity_only$/m);
+    expect(card).toMatch(/<- this commit$/m);
+    const [{ n }] = JSON.parse(querySql(duckdb, segments, 'SELECT count(*) AS n FROM commits', { session, format: 'json' }));
+    expect(n).toBeGreaterThan(0);
+    expect(() => cardText(duckdb, segments, `${session}.1.999999`)).toThrow(/no commit/);
   });
 
   test('measures every slow click, and its buckets are unions of intervals that sum to its duration', () => {

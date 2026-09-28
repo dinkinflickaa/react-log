@@ -107,8 +107,9 @@ events(session_id, page_load_id, ts, dur_us, self_us, kind, lane, component_id,
 
 defs(component_id, display_name, source_file, source_line, source_column, owner_path)
 
-measures(measure_instance_id, session_id, name, source, interaction_id, ts_start,
-         ts_end_marker, ts_end_paint, ts_end_idle)
+measures(measure_instance_id, session_id, page_load_id, name, source, interaction_id,
+         target, ts_start, ts_end_marker, ts_end_paint, ts_end_idle, duration_ms,
+         on_path_ms, interference_ms, waiting_ms)
 
 commits(commit_id, session_id, ts, measure_instance_id, on_critical_path, signature,
         root_update_id, producer_component_id, producer_call_site, trigger_event, lane,
@@ -129,9 +130,9 @@ Definitions.
 4. `reason_code`, `changed_hooks`, `changed_context` and `changed_keys` are defined under Why-data.
 5. `root_update_id` links update_enqueued, the renders and commit it produced, the effects that ran, and any update those effects enqueued. On 19.2+, update_enqueued exists only for the first update of each batch. On 18.0 to 19.1, `useSyncExternalStore` changes produce no update_enqueued row, because React calls no profiling hook for them; the commit walk still names the component and hook. yield and suspend rows come from 18.0 to 19.1 only.
 6. `lane` is the lane class name (Blocking, Transition, Suspense, Idle and so on). It comes from the commit lanes on 18.0 to 19.1 and from the Scheduler track name on 19.2+.
-7. `on_critical_path` is true when an event is reachable from the measure's trigger and precedes the measure's end. `signature` is a hash of trigger_event, producer_call_site and top_type.
+7. `on_critical_path` is true when an event is reachable from the measure's trigger and precedes the measure's end. `signature` is a hash of trigger_event, the producer's name, producer_call_site without line and column, lane, and the phase that enqueued the producing update (Decision log 27).
 8. `passive_sync` is true when passive effects ran in the same task as the commit, detected with a MessageChannel probe on every version. `strict_mode` is true when the root runs under StrictMode, so dev render times include React's double render.
-9. `measures.source` is `event_timing` or `marks`. For Event Timing measures, `ts_end_marker` is `processingEnd` and `ts_end_paint` is `startTime + duration`.
+9. `measures.source` is `event_timing` or `marks`. For Event Timing measures, `ts_end_marker` is `processingEnd` and `ts_end_paint` is `startTime + duration`, each the latest over the interaction's entries. An interaction's window is the union of its entries' windows, each from its input to the paint after its handlers, never before `processingEnd`; a mark pair's runs between its marks. `duration_ms` is the window's length, split into `on_path_ms`, `interference_ms` and `waiting_ms` (Decision log 28). `ts_end_idle` is when the last work of the chains the measure caused ended, after the paint too.
 
 ## Config
 
@@ -256,6 +257,15 @@ Acceptance. A capture left running for at least an hour in the cloud session aga
 21. An idle callback that fires on its timeout has no idle time left, which is how Chromium runs them in a busy or background tab (about once a second). The shim took a 1 ms slice then and a hidden tab drained about 7 KB a second; it now takes the full 4 ms slice.
 22. Benchmark noise, measured: two identical tabs differ by 4 to 6% at p50 on the small interaction, and the within-tab A/B (the shim's hooks switched off and on click by click in one tab) puts the shim's own in-click cost at 1 to 2.5% on 19.3 small and under the noise on 18.3.1 medium. The gated three-tab comparison still shows occasional shim tabs that stay 10 to 40% slower for a whole load; tracing found no GC inside those clicks, and the effect did not reproduce under tracing. Open.
 23. Capture's memory over a one-hour soak (1.94 million rows, 3,383 clicks, 3 reloads) rose 2.3% (111.9 to 114.5 MB RSS). A 20-minute run with a forced GC before every sample kept the live JS heap at 18.9 to 19.2 MB and RSS flat (113.4 to 113.5 MB), so the rise is garbage V8 had not collected yet, not a leak.
+
+2026-09-28, Phase 3. Evidence from the rollup's synthetic suites, the chains fixture page captured on all seven versions, and the lab.
+
+24. Update stacks go out raw, 30 frames, and the capture program parses them, maps every frame through the page's source maps and finds the call site and phase, skipping React's own frames by name and by mapped path (a store's change handler on 19.2+ has no name). This supersedes 20's 10 and 16 frames: the owner asked for full data with the parsing off the page. The stack starts at the hook React called, so no shim frame is sent.
+25. A tab the browser opens itself (ctrl+click or middle-click on a link, `Target.createTarget` with a URL) starts loading while auto-attach reports it paused. With capture 2 s slow to instrument it, React loaded without the shim and the tab recorded nothing; `window.open` popups were held. The e2e suite hit it about once in twenty full runs. Capture now intercepts document requests browser-wide (`Fetch.enable` on the browser target) and releases a tab's request once the shim is in place; the e2e suite keeps capture busy for 1.5 s while a tab opens, and fails without the fix. `runImmediately` (18) stays.
+26. Chain linker. Every update names the commit whose layout or passive phase enqueued it (`extra.during`), and a cascade continues that commit's chain, including on 19.2+ where the update row comes after the parent's commit row. A commit's producer is the earliest update of the last batch in its lane rendered by it, preferring one an input event enqueued (on 19.2+ a pending timer update can be the batch's only update row); the rest of the batch joins its chain. Rows wait up to 5 s of page time or 5 s wall time for late facts before they are written, and a chain left open for 30 s expires.
+27. The signature is a hash of trigger_event, the producer's name, producer_call_site without line and column, lane, and the phase that enqueued the producing update. It leaves out top_type and line numbers, which the plan had: Phase 5 compares the same signature before and after a fix, and a fix that works changes the top type (the 3,000 SidebarItem no-ops disappear) and moves lines. The phase tells two effects' cascades in one component apart. The same interaction gets the same signature on every React version.
+28. Measures. An interaction's window is the union of its entries' windows (input to the paint after its handlers), so a button held for 200 ms between pointerdown and click is not counted, while a slow pointerdown and a slow click both are. The paint end is never before `processingEnd`, because Event Timing rounds durations to the nearest 8 ms and a click's own commit fell after the rounded end. A measure's chains are the ones an input event started inside the window (updates enqueued while it was dispatched, and commits the shim saw it start), so a timer that fires between the input and its handlers is interference; a mark pair's are the updates between its marks. A blocking commit's whole render phase counts as its work, because a blocking render never yields; other lanes count their component spans. `bench/buckets.ts` recomputes every measure's buckets in SQL from the events.
+29. A commit with no update hook call (an external store on 18.0 to 19.1) takes its trigger from the event being dispatched, and React's scheduler, which runs from a MessageChannel, is no one's input.
 
 ## Kickoff prompt for Claude Code
 

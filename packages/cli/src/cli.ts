@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
-import { capture, captureEndpoint, loadConfig, watch } from '../../capture/src/index.ts';
+import { capture, captureEndpoint, duckdbPath, loadConfig, watch } from '../../capture/src/index.ts';
+import { cardText, listSessions, querySql, sessionsText, topText } from './report.ts';
 
 interface Command {
   name: string;
@@ -24,26 +25,26 @@ export const COMMANDS: readonly Command[] = [
   },
   {
     name: 'sessions',
-    usage: 'sessions',
+    usage: 'sessions [--segments <dir>]',
     summary: 'List captured sessions, newest first.',
     phase: 3,
   },
   {
     name: 'top',
-    usage: 'top --session <id> [--measure <name>]',
-    summary: 'Rank the most expensive commits in a session.',
+    usage: 'top [--session <id>] [--measure <name|id>] [--limit <n>] [--segments <dir>]',
+    summary: 'Rank the most expensive commits in a session (default: the newest).',
     phase: 3,
   },
   {
     name: 'card',
-    usage: 'card <commit_id>',
-    summary: 'Explain one commit: cause, extent, self cost and effects.',
+    usage: 'card <commit_id> [--segments <dir>]',
+    summary: 'Explain one commit: cause, extent, self cost, effects and cause chain.',
     phase: 3,
   },
   {
     name: 'query',
-    usage: 'query "<sql>"',
-    summary: 'Run SQL on the segments with the standard views loaded.',
+    usage: 'query "<sql>" [--session <id>] [--json | --csv] [--segments <dir>]',
+    summary: 'Run SQL on the segments with the views events, defs, commits and measures loaded.',
     phase: 3,
   },
 ];
@@ -144,6 +145,69 @@ async function runWatch(args: string[]): Promise<number> {
   return updated > 0 ? 0 : 1;
 }
 
+const reportOptions = {
+  segments: { type: 'string' },
+  duckdb: { type: 'string' },
+  config: { type: 'string' },
+} as const;
+
+function segmentsDir(values: { segments?: string; config?: string }): string {
+  return values.segments ?? loadConfig(values.config).segments.dir;
+}
+
+function runSessions(args: string[]): number {
+  const { values } = parseArgs({ args, strict: true, options: reportOptions });
+  process.stdout.write(sessionsText(segmentsDir(values)));
+  return 0;
+}
+
+function runTop(args: string[]): number {
+  const { values } = parseArgs({
+    args,
+    strict: true,
+    options: { ...reportOptions, session: { type: 'string' }, measure: { type: 'string' }, limit: { type: 'string' } },
+  });
+  const dir = segmentsDir(values);
+  const session = values.session ?? listSessions(dir)[0]?.session_id;
+  if (session === undefined) {
+    err(`react-log top: no sessions in ${dir}`);
+    return 1;
+  }
+  const limit = values.limit === undefined ? undefined : Number(values.limit);
+  if (limit !== undefined && !(Number.isInteger(limit) && limit > 0)) {
+    err('react-log top: --limit takes a positive whole number');
+    return 1;
+  }
+  process.stdout.write(topText(duckdbPath(values.duckdb), dir, session, { measure: values.measure, limit }));
+  return 0;
+}
+
+function runCard(args: string[]): number {
+  const { values, positionals } = parseArgs({ args, strict: true, allowPositionals: true, options: reportOptions });
+  if (positionals.length !== 1) {
+    err('Usage: react-log card <commit_id>');
+    return 1;
+  }
+  process.stdout.write(cardText(duckdbPath(values.duckdb), segmentsDir(values), positionals[0]!));
+  return 0;
+}
+
+function runQuery(args: string[]): number {
+  const { values, positionals } = parseArgs({
+    args,
+    strict: true,
+    allowPositionals: true,
+    options: { ...reportOptions, session: { type: 'string' }, json: { type: 'boolean' }, csv: { type: 'boolean' } },
+  });
+  if (positionals.length !== 1) {
+    err('Usage: react-log query "<sql>"');
+    return 1;
+  }
+  const format = values.json === true ? 'json' : values.csv === true ? 'csv' : 'box';
+  process.stdout.write(querySql(duckdbPath(values.duckdb), segmentsDir(values), positionals[0]!, { session: values.session, format }));
+  return 0;
+}
+
 export async function main(argv: readonly string[]): Promise<number> {
   const [name, ...rest] = argv;
   if (name === undefined || name === '-h' || name === '--help' || name === 'help') {
@@ -164,8 +228,20 @@ export async function main(argv: readonly string[]): Promise<number> {
     return 0;
   }
   try {
-    if (command.name === 'capture') return await runCapture(rest);
-    if (command.name === 'watch') return await runWatch(rest);
+    switch (command.name) {
+      case 'capture':
+        return await runCapture(rest);
+      case 'watch':
+        return await runWatch(rest);
+      case 'sessions':
+        return runSessions(rest);
+      case 'top':
+        return runTop(rest);
+      case 'card':
+        return runCard(rest);
+      case 'query':
+        return runQuery(rest);
+    }
   } catch (e) {
     err(`react-log ${command.name}: ${(e as Error).message}`);
     return 1;

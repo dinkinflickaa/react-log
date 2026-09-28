@@ -16,14 +16,14 @@ The shim calls `window.__reactLogSink(json)`, a CDP binding, once per message.
 
 `defs` rows: `[component_id, display_name, source_file, source_line, source_column, owner_path]`. On 19.1+ the source is a position in the served bundle, for the capture program to map through source maps.
 
-`rows`: `[kind, ts, dur_us, self_us, lane, component_id, commit, reason_code, changed_hooks, changed_context, changed_keys, committed, call_site, extra]`. `ts` is `performance.now()` ms on the page clock; add `timeOrigin` for wall time. `commit` is a per-page sequence number.
+`rows`: `[kind, ts, dur_us, self_us, lane, component_id, commit, reason_code, changed_hooks, changed_context, changed_keys, committed, call_site, extra]`. `ts` is `performance.now()` ms on the page clock; add `timeOrigin` for wall time. `commit` is a per-page sequence number. `call_site` is always null from the page: the capture program finds it in the update's stack.
 
 | kind | extra |
 | --- | --- |
 | `render` | `{strict}` when under StrictMode, else null |
 | `commit` | `root`, `priority`, `didError`, `strict`, `trigger`, `renderStart`, `renderEnd`, `commitStart`, `commitEnd`, `layoutStart`, `layoutEnd`, `passiveStart`, `passiveEnd`, `passiveSync`, `rendered`, `bailouts`, `walkUs` |
 | `layout_effect`, `passive_effect` | `{phase: mount or unmount}` on 18.0 to 19.1, `{name}` on 19.2+ |
-| `update_enqueued` | `method`, `phase` (render, layout, passive or null), `event` (trusted event type), `component`, `label` |
+| `update_enqueued` | `method`, `phase` (render, layout, passive or null), `event` (trusted event type), `component`, `label`, `stack` (V8's text, 30 frames from React's call into the shim outward, or null past `stacksPerBatch`), `during` (the `commit` whose layout or passive phase enqueued it, or null) |
 | `event_timing` | `name`, `interactionId`, `processingStart`, `processingEnd`, `target` |
 | `mark`, `measure` | `name`. Measures are the app's own `performance.measure` calls, recorded by the shim's wrapper; React 19.2+'s Performance Track measures are left out. |
 | `loaf` | `blocking`, `renderStart`, `styleAndLayoutStart`, `scripts` (top three) |
