@@ -58,7 +58,7 @@ Version facts the shim keys on. Checked in the react-dom npm builds on 2026-09-2
 | Per-fiber timers (ProfileMode) | if a hook exists at load | if a hook exists at load | if a hook exists at load | always in dev |
 | Mutation, Layout, Passive masks | 12854, 8772, 2064 | 13878, 8772, 10256 | 13878, 8772, 10256 | 13878, 8772, 10256 |
 
-`_debugHookTypes` exists in every dev build. Dev fibers are non-extensible, so per-fiber state lives in WeakMaps.
+`_debugHookTypes` exists in every dev build. Dev fibers are non-extensible, so per-fiber state lives in WeakMaps. Version strings can carry a build suffix (18.0.0 reports `18.0.0-fc46dba67-20220329`), so the shim keys on the leading major.minor only.
 
 ## Overhead
 

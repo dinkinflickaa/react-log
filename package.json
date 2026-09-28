@@ -1,0 +1,24 @@
+{
+  "name": "react-log-workspace",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json",
+    "build": "pnpm --filter @react-log/shim run build",
+    "fixture:build": "node fixture/build.ts",
+    "fixture:serve": "node fixture/serve.ts"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.4",
+    "esbuild": "0.28.2",
+    "jsdom": "29.1.1",
+    "react-log": "workspace:*",
+    "typescript": "7.0.2",
+    "vitest": "5.0.2"
+  }
+}

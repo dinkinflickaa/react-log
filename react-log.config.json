@@ -1,0 +1,9 @@
+{
+  "cdp": "http://localhost:9222",
+  "urlMatch": "localhost:3000",
+  "launch": { "chromePath": null, "userDataDir": "~/.react-log/profile", "isolate": false },
+  "interactions": { "eventTiming": true },
+  "measures": [{ "name": "route_switch", "start": "route_switch:start", "end": "route_switch:end" }],
+  "record": { "compositeOnly": true, "values": false, "stacksOn": ["update"], "stacksPerBatch": 8, "watch": [] },
+  "segments": { "dir": "./segments", "rotateSeconds": 10, "rotateRows": 200000 }
+}

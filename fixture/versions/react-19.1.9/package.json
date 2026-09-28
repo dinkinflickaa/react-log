@@ -1,0 +1,9 @@
+{
+  "name": "@react-log/react-19.1.9",
+  "version": "0.0.0",
+  "private": true,
+  "dependencies": {
+    "react": "19.1.9",
+    "react-dom": "19.1.9"
+  }
+}
