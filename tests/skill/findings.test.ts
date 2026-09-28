@@ -53,7 +53,7 @@ describe('the findings checker', () => {
     bad[3].evidence_query = 'SELECT nope FROM commits';
     bad[4].fix_class = 'rewrite_everything';
     const { entries } = checkFindings(bad);
-    expect(entries[0]!.problems.join()).toMatch(/Sidebar \(#bench-large\) is stabilize_producer, not memo_boundary/);
+    expect(entries[0]!.problems.join()).toMatch(/Sidebar \(#bug-producer\) is stabilize_producer, not memo_boundary/);
     expect(entries[1]!.problems.join()).toMatch(/total_ms is .*evidence_query returns/);
     expect(entries[2]!.problems.join()).toMatch(/component NoSuchComponent is not in defs/);
     expect(entries[3]!.problems.join()).toMatch(/evidence_query fails/);

@@ -5,7 +5,8 @@ import { createContext, memo, useContext, useLayoutEffect, useRef, useState } fr
 //
 //   #bench-small   SmallPanel     ~50 components, all commit
 //   #bench-medium  MediumTable    ~500 rows, reordered
-//   #bench-large   Sidebar        ~3,000 items, nearly all no-op  (stabilize_producer)
+//   #bench-large   LargeList      ~3,000 items, nearly all no-op
+//   #bug-producer  Sidebar        ~3,000 items, nearly all no-op  (stabilize_producer)
 //   #bug-context   ShellProvider  200 context consumers, no-op    (narrow_input)
 //   #bug-memo      Dashboard      300-bar chart re-renders, no-op (memo_boundary)
 //   #bug-hoist     Report         heavy computation in render     (hoist_render_work)
@@ -122,11 +123,41 @@ function MediumTable() {
   );
 }
 
-// ---- bench-large and stabilize_producer: every item is memoized, but the
-// inline onSelect is a new function on each render, so all 3,000 re-render
-// and only the two whose selection changed commit anything.
+// ---- bench-large: the benchmark's large interaction. Every item is
+// memoized, but the inline onSelect is a new function on each render, so all
+// 3,000 re-render and only the two whose selection changed commit anything.
+// The same code as Sidebar below, kept as it is: fixes land in Sidebar, and
+// this one stays the overhead benchmark's workload.
 
 const ITEMS = range(3000).map((i) => ({ id: i, label: `item ${i}` }));
+
+const LargeItem = memo(function LargeItem({ item, selected, onSelect }) {
+  return (
+    <li className={selected ? 'selected' : ''} onClick={() => onSelect(item.id)}>
+      {item.label}
+    </li>
+  );
+});
+
+function LargeList() {
+  const [selected, setSelected] = useState(0);
+  return (
+    <section>
+      <button id="bench-large" onClick={() => setSelected((s) => (s + 1) % ITEMS.length)}>
+        select next ({selected})
+      </button>
+      <ul>
+        {ITEMS.map((item) => (
+          <LargeItem key={item.id} item={item} selected={item.id === selected} onSelect={(id) => setSelected(id)} />
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+// ---- stabilize_producer: every item is memoized, but the inline onSelect is
+// a new function on each render, so all 3,000 re-render and only the two
+// whose selection changed commit anything.
 
 const SidebarItem = memo(function SidebarItem({ item, selected, onSelect }) {
   return (
@@ -140,7 +171,7 @@ function Sidebar() {
   const [selected, setSelected] = useState(0);
   return (
     <section>
-      <button id="bench-large" onClick={() => setSelected((s) => (s + 1) % ITEMS.length)}>
+      <button id="bug-producer" onClick={() => setSelected((s) => (s + 1) % ITEMS.length)}>
         select next ({selected})
       </button>
       <ul>
@@ -289,6 +320,7 @@ export function Lab() {
     <ShellProvider>
       <SmallPanel />
       <MediumTable />
+      <LargeList />
       <Sidebar />
       <Badges />
       <Dashboard />

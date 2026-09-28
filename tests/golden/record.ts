@@ -9,12 +9,15 @@ import { serveInChild, sleep, withCapture } from '../capture/harness.ts';
 // each planted bug's interaction three times, 1.1 s apart, with SidebarItem
 // and Cell watched so their changed_keys are recorded (both re-render for
 // changed props, and whether by identity or by value decides the verdict).
-// Replaces tests/golden/segments/ with the new session.
+// Replaces tests/golden/segments/ with the new session. The checked-in one
+// was recorded before the planted Sidebar moved from #bench-large to
+// #bug-producer, and before any Phase 5 fix: re-recording after a fix lands
+// records the fixed lab, which the golden findings no longer describe.
 //
 //   node tests/golden/record.ts
 
 export const GOLDEN_VERSION = '19.3.0';
-export const PLANTED = ['#bench-large', '#bug-context', '#bug-memo', '#bug-hoist', '#bug-effect', '#bug-diffuse', '#bug-budget'];
+export const PLANTED = ['#bug-producer', '#bug-context', '#bug-memo', '#bug-hoist', '#bug-effect', '#bug-diffuse', '#bug-budget'];
 export const WATCHED = ['SidebarItem', 'Cell'];
 const ROUNDS = 3;
 

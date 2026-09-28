@@ -15,7 +15,8 @@ export const BAILS = ['diffuse_genuine_work', 'within_budget', 'variance_too_hig
 // The lab's planted bugs (fixture/app/src/lab/Lab.jsx), by the component
 // whose state change produces the commit.
 export const PLANTED: Record<string, { button: string; verdict: string }> = {
-  Sidebar: { button: '#bench-large', verdict: 'stabilize_producer' },
+  // #bench-large when the golden session was recorded.
+  Sidebar: { button: '#bug-producer', verdict: 'stabilize_producer' },
   ShellProvider: { button: '#bug-context', verdict: 'narrow_input' },
   Dashboard: { button: '#bug-memo', verdict: 'memo_boundary' },
   Report: { button: '#bug-hoist', verdict: 'hoist_render_work' },

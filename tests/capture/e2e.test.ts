@@ -39,7 +39,7 @@ describe.each(['19.3.0', '18.3.1'])('capture against the lab on React %s', (vers
     run = await withCapture(root, `e2e-${version}`, url, {}, async (cdp, page) => {
       for (const b of ['#bench-small', '#bench-medium', '#bug-effect', '#bug-hoist']) await page.click(b);
       await page.settle();
-      expect(await watch(['SidebarItem'], { endpoint: captureEndpoint(join(root, `e2e-${version}`)), urlMatch: '127.0.0.1' })).toBe(1);
+      expect(await watch(['LargeItem'], { endpoint: captureEndpoint(join(root, `e2e-${version}`)), urlMatch: '127.0.0.1' })).toBe(1);
       await page.click('#bench-large');
       await page.settle();
       // A reload is a second page load in the same session.
@@ -107,11 +107,11 @@ describe.each(['19.3.0', '18.3.1'])('capture against the lab on React %s', (vers
   });
 
   test('maps component definitions to original source', () => {
-    const [d] = sql(`SELECT * FROM ${defs} WHERE display_name = 'SidebarItem' LIMIT 1`);
+    const [d] = sql(`SELECT * FROM ${defs} WHERE display_name = 'LargeItem' LIMIT 1`);
     expect(d.source_file).toMatch(/(^|\/)fixture\/app\/src\/lab\/Lab\.jsx$/);
-    // The element is created on this line of Sidebar.
-    expect(d.source_line).toBe(148);
-    expect(d.owner_path).toMatch(/Sidebar>SidebarItem#\d+$/);
+    // The element is created on this line of LargeList.
+    expect(d.source_line).toBe(151);
+    expect(d.owner_path).toMatch(/LargeList>LargeItem#\d+$/);
   });
 
   test('maps update call sites to original source', () => {
@@ -125,11 +125,11 @@ describe.each(['19.3.0', '18.3.1'])('capture against the lab on React %s', (vers
     const rows = sql(`
       SELECT changed_keys, count(*) AS n
       FROM ${seg} s JOIN ${defs} d USING (component_id)
-      WHERE s.kind = 'render' AND d.display_name = 'SidebarItem' AND s.reason_code = 'props'
+      WHERE s.kind = 'render' AND d.display_name = 'LargeItem' AND s.reason_code = 'props'
       GROUP BY 1 ORDER BY 2 DESC`);
     expect(rows[0]).toEqual({ changed_keys: 'onSelect:identity_only', n: 2998 });
     expect(rows.slice(1)).toEqual([{ changed_keys: 'selected:value,onSelect:identity_only', n: 2 }]);
-    const [{ other }] = sql(`SELECT count(*) AS other FROM ${seg} s JOIN ${defs} d USING (component_id) WHERE d.display_name <> 'SidebarItem' AND changed_keys IS NOT NULL`);
+    const [{ other }] = sql(`SELECT count(*) AS other FROM ${seg} s JOIN ${defs} d USING (component_id) WHERE d.display_name <> 'LargeItem' AND changed_keys IS NOT NULL`);
     expect(other).toBe(0);
     const [{ w }] = sql(`SELECT count(*) AS w FROM ${seg} WHERE kind = 'watch'`);
     expect(w).toBe(1);
@@ -153,18 +153,18 @@ describe.each(['19.3.0', '18.3.1'])('capture against the lab on React %s', (vers
     const segments = dirname(dir);
     const session = basename(dir);
     expect(sessionsText(segments)).toContain(session);
-    const [sidebar] = sql<{ commit_id: string }>(
-      `SELECT commit_id FROM read_parquet('${dir}/commits-*.parquet') WHERE top_type = 'SidebarItem' AND trigger_event = 'click' ORDER BY total_ms DESC LIMIT 1`,
+    const [large] = sql<{ commit_id: string }>(
+      `SELECT commit_id FROM read_parquet('${dir}/commits-*.parquet') WHERE top_type = 'LargeItem' AND trigger_event = 'click' ORDER BY total_ms DESC LIMIT 1`,
     );
     const top = topText(duckdb, segments, session, { limit: 5 });
     expect(top.split('\n').length).toBeLessThanOrEqual(12);
-    expect(top).toContain(sidebar!.commit_id);
-    const card = cardText(duckdb, segments, sidebar!.commit_id);
+    expect(top).toContain(large!.commit_id);
+    const card = cardText(duckdb, segments, large!.commit_id);
     expect(card.trimEnd().split('\n').length).toBeLessThanOrEqual(60);
-    expect(card).toMatch(/^cause click -> Sidebar at onClick \(lab\/Lab\.jsx:\d+:\d+\)$/m);
-    expect(card).toMatch(/top type SidebarItem x3,000/);
-    // SidebarItem was watched: the card says which prop changed, and how.
-    expect(card).toMatch(/^ {2}SidebarItem +lab\/Lab\.jsx:148 +3,000 .* props +onSelect:identity_only$/m);
+    expect(card).toMatch(/^cause click -> LargeList at onClick \(lab\/Lab\.jsx:\d+:\d+\)$/m);
+    expect(card).toMatch(/top type LargeItem x3,000/);
+    // LargeItem was watched: the card says which prop changed, and how.
+    expect(card).toMatch(/^ {2}LargeItem +lab\/Lab\.jsx:151 +3,000 .* props +onSelect:identity_only$/m);
     expect(card).toMatch(/<- this commit$/m);
     const [{ n }] = JSON.parse(querySql(duckdb, segments, 'SELECT count(*) AS n FROM commits', { session, format: 'json' }));
     expect(n).toBeGreaterThan(0);

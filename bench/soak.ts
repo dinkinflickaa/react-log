@@ -22,7 +22,7 @@ import { startFixtureServer } from '../fixture/serve.ts';
 import { duckdbPath } from '../packages/capture/src/capture.ts';
 import { CdpClient } from '../packages/capture/src/cdp.ts';
 
-const BUTTONS = ['#bench-small', '#bench-medium', '#bench-large', '#bug-context', '#bug-memo', '#bug-hoist', '#bug-effect', '#bug-diffuse', '#bug-budget'];
+const BUTTONS = ['#bench-small', '#bench-medium', '#bench-large', '#bug-producer', '#bug-context', '#bug-memo', '#bug-hoist', '#bug-effect', '#bug-diffuse', '#bug-budget'];
 
 const { values } = parseArgs({
   options: {
