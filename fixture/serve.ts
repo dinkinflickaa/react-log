@@ -51,7 +51,7 @@ export function startFixtureServer(port: number, opts: { isolate?: boolean } = {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const port = Number(process.env.PORT ?? 3000);
-  await startFixtureServer(port);
+  const server = await startFixtureServer(Number(process.env.PORT ?? 3000));
+  const { port } = server.address() as { port: number };
   console.log(`fixture on http://localhost:${port}/ (cross-origin isolated)`);
 }

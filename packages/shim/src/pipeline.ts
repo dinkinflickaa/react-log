@@ -13,7 +13,6 @@ import {
   K_WATCH,
   K_YIELD,
 } from './ring.ts';
-import { callSite, phaseFromStack } from './stack.ts';
 import { type Commit, type Fiber, now, type Shim } from './state.ts';
 import { R_COMMITTED, R_FORCED, R_MOUNT, R_STRICT } from './walk.ts';
 import { classifyKeys, whyRendered } from './why.ts';
@@ -311,13 +310,12 @@ function effectSpanRow(s: Shim, i: number, commitId: number): unknown[] {
   ];
 }
 
+// The stack goes out as V8's text: the capture program finds the call site
+// and the phase in it and maps every frame to original source.
 function updateRow(s: Shim, i: number): unknown[] {
   const ring = s.ring;
   const fiber = ring.r0[i] as Fiber;
   const stack = ring.r2[i] as Error | null;
-  const text = stack === null ? null : String(stack.stack ?? '');
-  let phase = ring.r3[i] as string | null;
-  if (text !== null && (phase === null || phase === 'cascade')) phase = phaseFromStack(text) ?? phase;
   return [
     'update_enqueued',
     r3(ring.t0[i]!),
@@ -331,13 +329,15 @@ function updateRow(s: Shim, i: number): unknown[] {
     null,
     null,
     null,
-    text === null ? null : callSite(text),
+    null,
     {
       method: ring.r1[i] ?? null,
-      phase,
+      phase: ring.r3[i] ?? null,
       event: ring.r4[i] ?? null,
       component: fiber == null ? (ring.r5[i] ?? null) : displayName(fiber),
       label: ring.r6[i] ?? null,
+      stack: stack === null ? null : String(stack.stack ?? ''),
+      during: ring.commit[i] || null,
     },
   ];
 }

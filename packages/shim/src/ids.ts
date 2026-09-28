@@ -1,4 +1,5 @@
 import { CONTEXT_CONSUMER, FORWARD_REF, SIMPLE_MEMO_COMPONENT } from './constants.ts';
+import { parseFrames } from './frames.ts';
 import type { Fiber, Shim } from './state.ts';
 
 export function displayName(fiber: Fiber): string {
@@ -78,42 +79,6 @@ export function sourceOf(s: Shim, fiber: Fiber, name: string): Source | null {
     return { file: f.file, line: f.line, column: f.column };
   }
   return null;
-}
-
-export interface Frame {
-  fn: string;
-  file: string;
-  line: number;
-  column: number;
-  text: string;
-}
-
-// V8 frames: "    at fn (file:line:col)" or "    at file:line:col".
-export function parseFrames(stack: string): Frame[] {
-  const out: Frame[] = [];
-  const lines = stack.split('\n');
-  for (let i = 0; i < lines.length; i++) {
-    const text = lines[i]!.trim();
-    if (!text.startsWith('at ')) continue;
-    const body = text.slice(3);
-    const open = body.lastIndexOf(' (');
-    let fn = '';
-    let loc = body;
-    if (open >= 0 && body.endsWith(')')) {
-      fn = body.slice(0, open);
-      loc = body.slice(open + 2, -1);
-    }
-    const bracket = fn.indexOf(' [as ');
-    if (bracket >= 0) fn = fn.slice(0, bracket);
-    if (fn.startsWith('async ')) fn = fn.slice(6);
-    const m = /^(.*):(\d+):(\d+)$/.exec(loc);
-    out.push(
-      m === null
-        ? { fn, file: '', line: 0, column: 0, text: body }
-        : { fn, file: m[1]!, line: Number(m[2]), column: Number(m[3]), text: body },
-    );
-  }
-  return out;
 }
 
 // Stable component_id: a 53-bit hash of the owner path (names and keys) and

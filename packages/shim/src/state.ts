@@ -100,7 +100,8 @@ export interface Shim {
   // Effect spans recorded before their commit was known (19.2+).
   unassignedSpans: number[];
   // Update captures from console.createTask waiting for React's "Update" measure (19.2+).
-  pendingTasks: { method: string; t: number; transition: boolean; event: string | null; stack: Error | null }[];
+  // `during`: the commit in progress when the update was enqueued, 0 if none.
+  pendingTasks: { method: string; t: number; transition: boolean; event: string | null; stack: Error | null; during: number }[];
   pendingTrigger: string | null;
   pendingTriggerAt: number;
   // Idle pipeline state.
@@ -167,7 +168,10 @@ export function newCommit(s: Shim, renderer: number): Commit {
     priority: null,
     didError: false,
     strict: false,
-    trigger: s.pendingTrigger !== null && now() - s.pendingTriggerAt < 1000 ? s.pendingTrigger : null,
+    // The event whose update started this render, else the event being
+    // dispatched (an external store change calls no update hook on 18.0 to
+    // 19.1, and React commits a discrete event's render before it returns).
+    trigger: s.pendingTrigger !== null && now() - s.pendingTriggerAt < 1000 ? s.pendingTrigger : currentEvent(s.g),
     renderStart: NaN,
     renderEnd: NaN,
     commitStart: NaN,
@@ -192,6 +196,15 @@ export function newCommit(s: Shim, renderer: number): Commit {
   s.commits.set(c.id, c);
   s.updatesSinceCommit = 0;
   return c;
+}
+
+// The trusted event being dispatched right now, if any. React's scheduler
+// runs its tasks from a MessageChannel, which is no one's input.
+export function currentEvent(g: any): string | null {
+  const e = g.event;
+  if (e == null || e.isTrusted !== true || typeof e.type !== 'string') return null;
+  if (e.type === 'message' && typeof g.MessagePort === 'function' && e.target instanceof g.MessagePort) return null;
+  return e.type;
 }
 
 export function now(): number {

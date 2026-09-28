@@ -67,13 +67,21 @@ export const SCHEMAS: Record<Family, [name: string, type: string][]> = {
   measures: [
     ['measure_instance_id', 'VARCHAR'],
     ['session_id', 'VARCHAR'],
+    ['page_load_id', 'INTEGER'],
     ['name', 'VARCHAR'],
     ['source', 'VARCHAR'],
     ['interaction_id', 'BIGINT'],
+    ['target', 'VARCHAR'],
     ['ts_start', 'BIGINT'],
     ['ts_end_marker', 'BIGINT'],
     ['ts_end_paint', 'BIGINT'],
     ['ts_end_idle', 'BIGINT'],
+    // [ts_start, ts_end_paint] (Event Timing) or [ts_start, ts_end_marker]
+    // (marks), split three ways: on-path work, interference, waiting.
+    ['duration_ms', 'DOUBLE'],
+    ['on_path_ms', 'DOUBLE'],
+    ['interference_ms', 'DOUBLE'],
+    ['waiting_ms', 'DOUBLE'],
   ],
 };
 

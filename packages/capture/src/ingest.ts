@@ -2,8 +2,10 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { CaptureConfig } from './config.ts';
+import { PageRollup, type RollupOutput, type SegRow } from './rollup.ts';
 import { SegmentWriter } from './segments.ts';
-import { type Mapped, type SourceMaps, splitFrame } from './sourcemap.ts';
+import type { Mapped, SourceMaps } from './sourcemap.ts';
+import { type ResolvedStack, resolveStack, resolveStackSync } from './stacks.ts';
 
 export interface SessionInfo {
   session_id: string;
@@ -20,12 +22,19 @@ export interface SessionInfo {
   refused: { reason: string; detail: string } | null;
   errors: string[];
   rows: number;
+  commits: number;
+  measures: number;
   dropped: number;
 }
 
 interface PageLoad {
   id: number;
   timeOrigin: number;
+  rollup: PageRollup;
+  // Rows reach the rollup in page order; a row that waits for a source map
+  // holds the ones behind it.
+  tail: Promise<void>;
+  waiting: number;
 }
 
 // Page-clock ms fields inside `extra`, converted to epoch µs like `ts`.
@@ -49,8 +58,9 @@ function gitSha(): string | null {
   }
 }
 
-// One capture session: one browser target. Turns shim messages into rows for
-// the segment writer. Each execution context that says hello is a page load.
+// One capture session: one browser target. Turns shim messages into rows,
+// links and rolls them up per page load (rollup.ts), and hands them to the
+// segment writer. Each execution context that says hello is a page load.
 export class Session {
   readonly id: string;
   readonly dir: string;
@@ -59,8 +69,11 @@ export class Session {
   private readonly maps: SourceMaps;
   private readonly contexts = new Map<number, PageLoad>();
   private readonly defsSeen = new Set<string>();
+  // component_id to display name, for the rollups' top types and producers.
+  private readonly names = new Map<string, string>();
   private readonly pending = new Set<Promise<void>>();
   private saveTimer: NodeJS.Timeout | null = null;
+  private drainTimer: NodeJS.Timeout | null = null;
   onRefused: ((reason: string, detail: string) => void) | null = null;
   onError: ((message: string) => void) | null = null;
 
@@ -90,12 +103,16 @@ export class Session {
       refused: null,
       errors: [],
       rows: 0,
+      commits: 0,
+      measures: 0,
       dropped: 0,
     };
   }
 
   async start(): Promise<void> {
     await this.writer.init();
+    this.drainTimer = setInterval(() => this.drain(false), 1000);
+    this.drainTimer.unref();
     this.saveNow();
   }
 
@@ -110,7 +127,8 @@ export class Session {
     switch (msg.t) {
       case 'hello': {
         const id = this.info.page_loads.length + 1;
-        this.contexts.set(contextId, { id, timeOrigin: msg.timeOrigin });
+        const rollup = new PageRollup({ sessionId: this.id, pageLoadId: id, names: this.names, marks: this.info.config.measures });
+        this.contexts.set(contextId, { id, timeOrigin: msg.timeOrigin, rollup, tail: Promise.resolve(), waiting: 0 });
         this.info.page_loads.push({ page_load_id: id, url: msg.url, token: msg.token, time_origin: msg.timeOrigin });
         this.info.shim_version = msg.shim;
         if (this.info.app_url === '' || this.info.app_url === 'about:blank') this.info.app_url = msg.url;
@@ -140,7 +158,7 @@ export class Session {
         for (const r of msg.rows) this.event(page, r);
         if (msg.dropped > 0) {
           this.info.dropped += msg.dropped;
-          this.writeEvent(page, { kind: 'dropped', ts: Math.round(Date.now() * 1000), extra: { count: msg.dropped } });
+          this.enqueue(page, this.row(page, { kind: 'dropped', ts: Math.round(Date.now() * 1000), extra: { count: msg.dropped } }), null);
           this.save();
         }
         return;
@@ -150,15 +168,37 @@ export class Session {
     }
   }
 
+  // Everything final goes to the writer; with all, everything held.
+  drain(all: boolean): void {
+    const now = Date.now();
+    for (const page of this.contexts.values()) {
+      if (all || page.waiting === 0) this.write(page.rollup.drain(now, all));
+    }
+  }
+
   async close(): Promise<void> {
+    if (this.drainTimer !== null) clearInterval(this.drainTimer);
+    this.drainTimer = null;
+    await Promise.all([...this.contexts.values()].map((p) => p.tail));
+    this.drain(true);
     await Promise.all(this.pending);
     await this.writer.close();
     this.info.ended_at = new Date().toISOString();
     this.saveNow();
   }
 
+  private write(out: RollupOutput): void {
+    for (const r of out.seg) this.writer.write('seg', r);
+    for (const c of out.commits) this.writer.write('commits', c);
+    for (const m of out.measures) this.writer.write('measures', m);
+    this.info.rows += out.seg.length;
+    this.info.commits += out.commits.length;
+    this.info.measures += out.measures.length;
+  }
+
   private def(d: any[]): void {
     const [id, name, file, line, column, path] = d;
+    if (typeof name === 'string') this.names.set(id, name);
     if (this.defsSeen.has(id)) return;
     if (this.defsSeen.size >= 200_000) this.defsSeen.clear();
     this.defsSeen.add(id);
@@ -172,22 +212,53 @@ export class Session {
         owner_path: path,
       });
     if (typeof file === 'string' && /^https?:\/\//.test(file) && typeof line === 'number') {
-      this.mapped(file, line, column ?? 1, write);
+      const hit = this.maps.peek(file, line, column ?? 1);
+      if (hit !== undefined) {
+        write(hit);
+        return;
+      }
+      const p = this.maps.resolve(file, line, column ?? 1).then(write, () => write(null));
+      this.pending.add(p);
+      void p.finally(() => this.pending.delete(p));
     } else {
       write(null);
     }
   }
 
+  private row(page: PageLoad, fields: Partial<SegRow> & { kind: string }): SegRow {
+    return {
+      session_id: this.id,
+      page_load_id: page.id,
+      ts: null,
+      dur_us: null,
+      self_us: null,
+      lane: null,
+      component_id: null,
+      commit_id: null,
+      reason_code: null,
+      changed_hooks: null,
+      changed_context: null,
+      changed_keys: null,
+      committed: null,
+      root_update_id: null,
+      measure_instance_id: null,
+      on_critical_path: null,
+      call_site: null,
+      extra: null,
+      ...fields,
+    };
+  }
+
   private event(page: PageLoad, r: any[]): void {
     const [kind, ts, dur, self, lane, componentId, commit, reason, hooks, context, keys, committed, callSite, extra] = r;
-    const row: Record<string, unknown> = {
+    const row = this.row(page, {
       kind,
       ts: ts === null ? null : Math.round((page.timeOrigin + ts) * 1000),
       dur_us: dur,
       self_us: self,
       lane,
       component_id: componentId,
-      commit_id: commit === null ? null : `${this.id}.${page.id}.${commit}`,
+      commit_id: commit === null ? null : this.commitId(page, commit),
       reason_code: reason,
       changed_hooks: hooks,
       changed_context: context,
@@ -195,16 +266,44 @@ export class Session {
       committed,
       call_site: callSite,
       extra: extra === null ? null : this.epochExtra(page, kind, extra),
-    };
-    const frame = typeof callSite === 'string' ? splitFrame(callSite) : null;
-    if (frame !== null && /^https?:\/\//.test(frame.url)) {
-      this.mapped(frame.url, frame.line, frame.column, (m) => {
-        if (m !== null) row.call_site = `${frame.fn ?? m.name ?? '<anonymous>'} (${m.file}:${m.line}:${m.column})`;
-        this.writeEvent(page, row);
-      });
-    } else {
-      this.writeEvent(page, row);
+    });
+    let prep: Promise<void> | null = null;
+    if (kind === 'update_enqueued' && row.extra !== null) {
+      if (typeof row.extra.during === 'number') row.extra.during = this.commitId(page, row.extra.during);
+      const text = row.extra.stack;
+      if (typeof text === 'string') {
+        const now = resolveStackSync(this.maps, text);
+        if (now !== null) this.applyStack(row, now);
+        else prep = resolveStack(this.maps, text).then((s) => this.applyStack(row, s));
+      }
     }
+    this.enqueue(page, row, prep);
+  }
+
+  private commitId(page: PageLoad, n: number): string {
+    return `${this.id}.${page.id}.${n}`;
+  }
+
+  // The call site and phase come from the stack; every frame is kept, mapped.
+  private applyStack(row: SegRow, s: ResolvedStack): void {
+    row.call_site = s.callSite;
+    row.extra.stack = s.frames;
+    if ((row.extra.phase === null || row.extra.phase === 'cascade') && s.phase !== null) row.extra.phase = s.phase;
+  }
+
+  private enqueue(page: PageLoad, row: SegRow, prep: Promise<void> | null): void {
+    if (prep === null && page.waiting === 0) {
+      page.rollup.push(row, Date.now());
+      return;
+    }
+    page.waiting++;
+    page.tail = page.tail
+      .then(() => prep)
+      .catch((e) => this.error(`stack: ${(e as Error).message}`))
+      .then(() => {
+        page.rollup.push(row, Date.now());
+        page.waiting--;
+      });
   }
 
   private epochExtra(page: PageLoad, kind: string, extra: any): object {
@@ -216,31 +315,6 @@ export class Session {
       out.scripts = out.scripts.map((s: any) => (typeof s.start === 'number' ? { ...s, start: Math.round((page.timeOrigin + s.start) * 1000) } : s));
     }
     return out;
-  }
-
-  private writeEvent(page: PageLoad, row: Record<string, unknown>): void {
-    this.writer.write('seg', {
-      session_id: this.id,
-      page_load_id: page.id,
-      root_update_id: null,
-      measure_instance_id: null,
-      on_critical_path: null,
-      ...row,
-    });
-    this.info.rows++;
-  }
-
-  // Runs write with the original-source position, synchronously when the
-  // script's source map is already loaded.
-  private mapped(url: string, line: number, column: number, write: (m: Mapped | null) => void): void {
-    const hit = this.maps.peek(url, line, column);
-    if (hit !== undefined) {
-      write(hit);
-      return;
-    }
-    const p = this.maps.resolve(url, line, column).then(write, () => write(null));
-    this.pending.add(p);
-    void p.finally(() => this.pending.delete(p));
   }
 
   private error(message: string): void {

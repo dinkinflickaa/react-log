@@ -57,7 +57,11 @@ interface Attached {
   session: Session | null;
   // Execution contexts whose hello was for a URL that does not match.
   ignored: Set<number>;
+  // Settles when the shim and the binding are in place.
+  ready: Promise<void>;
 }
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 export async function capture(opts: CaptureOptions): Promise<CaptureResult> {
   const log = opts.log ?? ((line: string) => process.stderr.write(`${line}\n`));
@@ -142,9 +146,13 @@ export async function capture(opts: CaptureOptions): Promise<CaptureResult> {
         void cdp.send('Runtime.runIfWaitingForDebugger', {}, sid).catch(() => {});
         return;
       }
-      const a: Attached = { sessionId: sid, targetId: info.targetId, url: info.url, recordAll: false, session: null, ignored: new Set() };
+      const a: Attached = { sessionId: sid, targetId: info.targetId, url: info.url, recordAll: false, session: null, ignored: new Set(), ready: Promise.resolve() };
       attached.set(sid, a);
-      void setup(a, false, true).catch((err) => log(`react-log: cannot instrument ${info.url}: ${err.message}`));
+      a.ready = setup(a, true).catch((err) => log(`react-log: cannot instrument ${info.url}: ${err.message}`));
+      return;
+    }
+    if (e.method === 'Fetch.requestPaused' && e.sessionId === undefined) {
+      void holdDocument(e.params);
       return;
     }
     if (e.method === 'Target.detachedFromTarget' && e.sessionId === undefined) {
@@ -155,13 +163,31 @@ export async function capture(opts: CaptureOptions): Promise<CaptureResult> {
     }
   };
 
+  // A tab the browser opens itself (open link in new tab, Target.createTarget
+  // with a URL) starts loading while auto-attach reports it paused, so its
+  // scripts could run before the shim. Every document request of a tab
+  // capture instruments waits until the shim is in place; other documents
+  // (subframes, tabs capture leaves alone) go straight through.
+  const holdDocument = async (p: { requestId: string; frameId?: string }) => {
+    try {
+      for (const a of attached.values()) {
+        if (a.targetId === p.frameId) {
+          await Promise.race([a.ready, sleep(5000)]);
+          break;
+        }
+      }
+    } finally {
+      await cdp.send('Fetch.continueRequest', { requestId: p.requestId }).catch(() => {});
+    }
+  };
+
   const closeSession = async (s: Session) => {
     await s.close();
     done.push(s);
     log(`react-log: session ${s.id}: ${s.info.rows} rows, ${s.writer.filesWritten} files, ${s.info.dropped} dropped`);
   };
 
-  const setup = async (a: Attached, reload: boolean, waiting: boolean) => {
+  const setup = async (a: Attached, waiting: boolean) => {
     const sid = a.sessionId;
     // Chromium installs the binding only with Runtime enabled, and runs
     // new-document scripts only with Page enabled.
@@ -182,7 +208,6 @@ export async function capture(opts: CaptureOptions): Promise<CaptureResult> {
       await cdp.send('Fetch.enable', { patterns: [{ urlPattern: '*', resourceType: 'Document', requestStage: 'Response' }] }, sid);
     }
     if (waiting) await cdp.send('Runtime.runIfWaitingForDebugger', {}, sid);
-    if (reload) await cdp.send('Page.reload', {}, sid);
   };
 
   const off = cdp.on(onEvent);
@@ -198,21 +223,28 @@ export async function capture(opts: CaptureOptions): Promise<CaptureResult> {
     if (ext !== null) {
       throw new Error(`The React DevTools extension is enabled in this browser (${ext}). react-log replaces it and cannot share a page with it: disable it in the capture profile.`);
     }
+    // Browser-wide, so it also covers tabs opened from now on (holdDocument).
+    await cdp
+      .send('Fetch.enable', { patterns: [{ urlPattern: '*', resourceType: 'Document', requestStage: 'Request' }] })
+      .catch((err) => log(`react-log: cannot hold new tabs until instrumented (${err.message}); a tab opened with a URL may start before the shim`));
     if (opts.launch !== undefined) {
       const { targetId } = await cdp.send<{ targetId: string }>('Target.createTarget', { url: 'about:blank' });
       const { sessionId } = await cdp.send<{ sessionId: string }>('Target.attachToTarget', { targetId, flatten: true });
-      const a: Attached = { sessionId, targetId, url: opts.launch, recordAll: true, session: null, ignored: new Set() };
+      const a: Attached = { sessionId, targetId, url: opts.launch, recordAll: true, session: null, ignored: new Set(), ready: Promise.resolve() };
       attached.set(sessionId, a);
-      await setup(a, false, false);
+      a.ready = setup(a, false);
+      await a.ready;
       await cdp.send('Page.navigate', { url: opts.launch }, sessionId);
     } else {
       const pages = targetInfos.filter((t) => t.type === 'page' && t.url.includes(urlMatch));
       if (pages.length === 0) log(`react-log: no open page matches "${urlMatch}" yet; waiting for one`);
       for (const t of pages) {
         const { sessionId } = await cdp.send<{ sessionId: string }>('Target.attachToTarget', { targetId: t.targetId, flatten: true });
-        const a: Attached = { sessionId, targetId: t.targetId, url: t.url, recordAll: false, session: null, ignored: new Set() };
+        const a: Attached = { sessionId, targetId: t.targetId, url: t.url, recordAll: false, session: null, ignored: new Set(), ready: Promise.resolve() };
         attached.set(sessionId, a);
-        await setup(a, opts.reload === true, false);
+        a.ready = setup(a, false);
+        await a.ready;
+        if (opts.reload === true) await cdp.send('Page.reload', {}, sessionId);
         if (opts.reload !== true) log(`react-log: ${t.url} was already loaded; its React started before the shim. Reload it, or pass --reload.`);
       }
     }
@@ -226,6 +258,8 @@ export async function capture(opts: CaptureOptions): Promise<CaptureResult> {
     if (timer !== null) clearTimeout(timer);
   } finally {
     closing = true;
+    // Held document requests go through, and new ones are no longer held.
+    if (!cdp.isClosed) await cdp.send('Fetch.disable').catch(() => {});
     // Rows still in a page's ring would be lost with the browser: flush them
     // through the binding first. The binding events arrive before the reply.
     if (!cdp.isClosed) {

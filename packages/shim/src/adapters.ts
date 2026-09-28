@@ -2,7 +2,7 @@ import { laneClassIndex, laneClassOf } from './constants.ts';
 import { K_EFFECT_SPAN, K_LAYOUT_EFFECT, K_PASSIVE_EFFECT, K_SUSPEND, K_UPDATE, K_YIELD } from './ring.ts';
 import { recordEntry } from './observer.ts';
 import { captureStack } from './stack.ts';
-import { type Fiber, newCommit, now, type Renderer, type Shim } from './state.ts';
+import { currentEvent, type Fiber, newCommit, now, type Renderer, type Shim } from './state.ts';
 import { settlePassive } from './walk.ts';
 
 export const EFFECT_UNMOUNT = 1;
@@ -14,16 +14,10 @@ function setTrigger(s: Shim, event: string): void {
   s.pendingTriggerAt = now();
 }
 
-export function currentEvent(g: any): string | null {
-  const e = g.event;
-  return e != null && e.isTrusted === true && typeof e.type === 'string' ? e.type : null;
-}
-
-// Frames to keep past the shim's: React's update path (up to five frames),
-// the call site, and on 19.2+ enough of React's commit or render frames to
-// tell the phase, which 18.0 to 19.1 get from the profiling hooks instead.
-const FRAMES_WITH_HOOKS = 10;
-const FRAMES_19_2 = 16;
+// Frames kept past the shim's own: React's update path, the call site and
+// the app code above it, and React's commit or render frames that tell the
+// phase. The capture program stores all of them, source-mapped.
+const STACK_FRAMES = 30;
 
 function stackForUpdate(s: Shim, limit: number, skip: Function): Error | null {
   return s.updatesSinceCommit++ < s.config.stacksPerBatch ? captureStack(limit, skip) : null;
@@ -64,7 +58,8 @@ export function profilingHooks(s: Shim, r: Renderer): Record<string, (...args: a
     }
     effFiber = null;
   };
-  const update = (fiber: Fiber, lane: number, method: string) => {
+  // `cut` is the hook function React called: the stack starts at its caller.
+  const update = (fiber: Fiber, lane: number, method: string, cut: Function) => {
     const i = ring.alloc(K_UPDATE);
     if (i < 0) return;
     const event = currentEvent(s.g);
@@ -73,9 +68,13 @@ export function profilingHooks(s: Shim, r: Renderer): Record<string, (...args: a
     ring.n0[i] = laneClassOf(lane, r.laneLabels);
     ring.r0[i] = fiber;
     ring.r1[i] = method;
-    ring.r2[i] = stackForUpdate(s, FRAMES_WITH_HOOKS, update);
+    ring.r2[i] = stackForUpdate(s, STACK_FRAMES, cut);
     ring.r3[i] = s.phase === 'idle' ? null : s.phase === 'commit' ? 'layout' : s.phase;
     ring.r4[i] = event;
+    // An update enqueued inside a commit's layout or passive phase is that
+    // commit's cascade; the capture program links the two.
+    const during = s.phase === 'commit' ? s.open : s.phase === 'passive' ? (s.pendingPassive ?? s.lastCommitted) : null;
+    ring.commit[i] = during === null ? 0 : during.id;
   };
   const wrap =
     <A extends any[]>(fn: (...args: A) => void) =>
@@ -87,7 +86,7 @@ export function profilingHooks(s: Shim, r: Renderer): Record<string, (...args: a
       }
     };
 
-  return {
+  const hooks: Record<string, (...args: any[]) => void> = {
     markRenderStarted: wrap((_lanes: number) => {
       if (Number.isNaN(renderStart)) renderStart = now();
       s.phase = 'render';
@@ -141,11 +140,11 @@ export function profilingHooks(s: Shim, r: Renderer): Record<string, (...args: a
     markComponentPassiveEffectMountStopped: wrap(stopEffect),
     markComponentPassiveEffectUnmountStarted: wrap((f: Fiber) => startEffect(f, K_PASSIVE_EFFECT, EFFECT_UNMOUNT)),
     markComponentPassiveEffectUnmountStopped: wrap(stopEffect),
-    markStateUpdateScheduled: wrap((f: Fiber, lane: number) => update(f, lane, 'setState')),
+    markStateUpdateScheduled: wrap((f: Fiber, lane: number) => update(f, lane, 'setState', hooks.markStateUpdateScheduled!)),
     markForceUpdateScheduled: wrap((f: Fiber, lane: number) => {
       s.forced.add(f);
       if (f.alternate != null) s.forced.add(f.alternate);
-      update(f, lane, 'forceUpdate');
+      update(f, lane, 'forceUpdate', hooks.markForceUpdateScheduled!);
     }),
     markComponentSuspended: wrap((f: Fiber) => {
       const i = ring.alloc(K_SUSPEND);
@@ -154,6 +153,7 @@ export function profilingHooks(s: Shim, r: Renderer): Record<string, (...args: a
       ring.r0[i] = f;
     }),
   };
+  return hooks;
 }
 
 const SCHEDULER = 'Scheduler ⚛';
@@ -184,17 +184,18 @@ export function installTracks(s: Shim): void {
     }
     const createTask = con.createTask;
     if (typeof createTask === 'function') {
-      con.createTask = function (this: unknown, name: unknown) {
+      const wrapped = function (this: unknown, name: unknown) {
         // Element tasks are named "<Type>"; update methods end in "()".
         if (s.tracksRenderer !== null && typeof name === 'string' && name.charCodeAt(0) !== 60 && name.charCodeAt(name.length - 1) === 41) {
           try {
-            onUpdateTask(s, name);
+            onUpdateTask(s, name, wrapped);
           } catch (e) {
             report(s, e);
           }
         }
         return createTask.apply(this, arguments as unknown as unknown[]);
       };
+      con.createTask = wrapped;
     }
   }
   const perf = g.performance;
@@ -289,7 +290,8 @@ function onTimeStamp(s: Shim, label: string, start: number, end: number, track: 
   }
 }
 
-function onUpdateTask(s: Shim, method: string): void {
+// `cut` is the console.createTask wrapper: the stack starts at React's frame.
+function onUpdateTask(s: Shim, method: string, cut: Function): void {
   const shared = s.tracksRenderer!.internals.currentDispatcherRef;
   const event = currentEvent(s.g);
   if (event !== null && s.pendingTrigger === null) setTrigger(s, event);
@@ -299,7 +301,10 @@ function onUpdateTask(s: Shim, method: string): void {
     t: now(),
     transition: shared != null && shared.T != null,
     event,
-    stack: stackForUpdate(s, FRAMES_19_2, onUpdateTask),
+    stack: stackForUpdate(s, STACK_FRAMES, cut),
+    // Mid-commit or mid-passive-flush: the stack tells the capture program
+    // whether an effect enqueued this update.
+    during: (s.pendingPassive ?? s.open)?.id ?? 0,
   });
 }
 
@@ -350,6 +355,7 @@ export function emitUpdateSpan(
   ring.r4[i] = task?.event ?? null;
   ring.r5[i] = component;
   ring.r6[i] = label;
+  ring.commit[i] = task?.during ?? 0;
 }
 
 // Shim errors never reach React: report each distinct one once.

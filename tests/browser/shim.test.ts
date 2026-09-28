@@ -1,3 +1,4 @@
+import { callSite } from '../../packages/shim/src/frames.ts';
 import { readdirSync } from 'node:fs';
 import type { Server } from 'node:http';
 import { fileURLToPath } from 'node:url';
@@ -98,8 +99,12 @@ describe.each(versions)('shim in headless Chromium, React %s', (version) => {
     const update = rows.find((r) => r[0] === 'update_enqueued' && (r[5] === idOf('App') || r[13]?.component === 'App'));
     expect(update, 'update_enqueued for App').toBeDefined();
     expect(update![4]).toBe('Blocking');
-    expect(update![12]).toMatch(/app\.js:\d+:\d+/);
-    expect(update![12]).not.toMatch(/react-log-shim/);
+    // The page sends the raw stack; capture finds the call site in it.
+    expect(update![12]).toBeNull();
+    const site = callSite(update![13].stack);
+    expect(site).toMatch(/app\.js:\d+:\d+/);
+    expect(site).not.toMatch(/react-log-shim/);
+    expect(update![13].stack).not.toMatch(/react-log-shim/);
     expect(update![13].event).toBe('click');
 
     // A discrete click commits on the sync lane, which flushes passive effects
