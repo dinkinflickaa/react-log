@@ -1,4 +1,4 @@
-import { createContext, memo, useContext, useLayoutEffect, useRef, useState } from 'react';
+import { createContext, memo, useCallback, useContext, useLayoutEffect, useRef, useState } from 'react';
 
 // The lab: benchmark interactions and planted performance bugs. Each section
 // owns its state and button, so an interaction re-renders only its section.
@@ -169,6 +169,7 @@ const SidebarItem = memo(function SidebarItem({ item, selected, onSelect }) {
 
 function Sidebar() {
   const [selected, setSelected] = useState(0);
+  const onSelect = useCallback((id) => setSelected(id), []);
   return (
     <section>
       <button id="bug-producer" onClick={() => setSelected((s) => (s + 1) % ITEMS.length)}>
@@ -176,7 +177,7 @@ function Sidebar() {
       </button>
       <ul>
         {ITEMS.map((item) => (
-          <SidebarItem key={item.id} item={item} selected={item.id === selected} onSelect={(id) => setSelected(id)} />
+          <SidebarItem key={item.id} item={item} selected={item.id === selected} onSelect={onSelect} />
         ))}
       </ul>
     </section>
