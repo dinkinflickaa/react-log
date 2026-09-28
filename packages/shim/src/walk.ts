@@ -147,6 +147,11 @@ function walk(s: Shim, r: Renderer, top: Fiber, c: Commit): void {
     } else {
       own = (node.flags & (PLACEMENT | CHILD_DELETION | CONTENT_RESET | VISIBILITY | HYDRATING)) !== 0 ? 1 : 0;
     }
+    // React clears Placement and Hydrating on the placed fiber during the
+    // mutation phase, before this walk; its parent's subtreeFlags keep them.
+    // A child inserted or moved is a DOM change for its ancestors only: a
+    // moved row's own render produced the same output.
+    if ((node.subtreeFlags & (PLACEMENT | HYDRATING)) !== 0) own = 1;
     acc[depth] = own;
     slots[depth] = slot;
 

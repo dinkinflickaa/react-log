@@ -25,11 +25,11 @@ The shim calls `window.__reactLogSink(json)`, a CDP binding, once per message.
 | `layout_effect`, `passive_effect` | `{phase: mount or unmount}` on 18.0 to 19.1, `{name}` on 19.2+ |
 | `update_enqueued` | `method`, `phase` (render, layout, passive or null), `event` (trusted event type), `component`, `label` |
 | `event_timing` | `name`, `interactionId`, `processingStart`, `processingEnd`, `target` |
-| `mark`, `measure` | `name` |
+| `mark`, `measure` | `name`. Measures are the app's own `performance.measure` calls, recorded by the shim's wrapper; React 19.2+'s Performance Track measures are left out. |
 | `loaf` | `blocking`, `renderStart`, `styleAndLayoutStart`, `scripts` (top three) |
 | `watch` | `names` |
 | `yield`, `suspend` | null |
 
 ## Page API
 
-`window.__reactLog`: `status` (`active` or `refused`), `reason`, `version`, `stats` (commits, walk time, longest idle task), `flushNow()`. `window.__reactLogWatch`: the watch list; setting it records a `watch` row. `window.__reactLogConfig`, if set before the shim runs, overrides `ringSize`, `flushIntervalMs`, `sliceMs`, `stacksPerBatch` and `watch`.
+`window.__reactLog`: `status` (`active` or `refused`), `reason`, `version`, `stats`, `flushNow()`, and `pending()` (records not yet handed to the sink). `stats` has commit and row counts, total and longest walk time, the longest shim task (`maxTaskMs`, split into `maxIdleMs` for idle slices and `maxObserverMs` for PerformanceObserver callbacks), the longest sink call and the largest payload. `window.__reactLogWatch`: the watch list; setting it records a `watch` row. `window.__reactLogConfig`, if set before the shim runs, overrides `ringSize`, `flushIntervalMs`, `sliceMs`, `stacksPerBatch`, `watch` and `observe` (entry types: `event`, `mark`, `measure`, `long-animation-frame`).

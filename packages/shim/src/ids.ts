@@ -138,6 +138,7 @@ export function componentId(s: Shim, fiber: Fiber): string {
     id = hash53(src === null ? path : `${path}|${src.file}:${src.line}:${src.column}`);
     s.idByPath.set(path, id);
     s.defs.push([id, name, src?.file ?? null, src?.line ?? null, src?.column ?? null, path]);
+    s.defBytes += 40 + id.length + name.length + path.length + (src?.file.length ?? 0);
   }
   s.idByFiber.set(fiber, id);
   if (alt != null) s.idByFiber.set(alt, id);

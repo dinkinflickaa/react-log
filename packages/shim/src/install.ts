@@ -15,6 +15,8 @@ export interface ShimApi {
   stats: Stats;
   config: Config;
   flushNow(): void;
+  // Records waiting to be flushed.
+  pending(): number;
 }
 
 const HOOK = '__REACT_DEVTOOLS_GLOBAL_HOOK__';
@@ -33,6 +35,7 @@ export function install(g: any, overrides: Partial<Config> = {}): ShimApi {
     stats: s.stats,
     config,
     flushNow: () => flushNow(s),
+    pending: () => s.ring.count + s.outbox.length,
   };
   Object.defineProperty(g, '__reactLog', { value: api, configurable: true });
 

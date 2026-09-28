@@ -37,6 +37,10 @@ const REACT_UPDATE = new Set([
   'updateContainerImpl',
 ]);
 
+// root.render(): React assigns one function to both root prototypes, so V8
+// names the frame "ReactDOMHydrationRoot.render.ReactDOMRoot.render".
+const ROOT_RENDER = /(^|\.)ReactDOM(Hydration)?Root\.render$/;
+
 function lastName(fn: string): string {
   const dot = fn.lastIndexOf('.');
   return dot < 0 ? fn : fn.slice(dot + 1);
@@ -47,7 +51,7 @@ export function callSite(stack: string): string | null {
   const frames = parseFrames(stack);
   let i = 0;
   while (i < frames.length && SHIM_FILE.test(frames[i]!.file)) i++;
-  while (i < frames.length && REACT_UPDATE.has(lastName(frames[i]!.fn))) i++;
+  while (i < frames.length && (REACT_UPDATE.has(lastName(frames[i]!.fn)) || ROOT_RENDER.test(frames[i]!.fn))) i++;
   const f: Frame | undefined = frames[i];
   return f === undefined ? null : f.text;
 }

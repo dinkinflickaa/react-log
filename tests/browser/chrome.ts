@@ -183,7 +183,7 @@ export async function openPage(cdp: Cdp, url: string, shim: string, before?: str
     evaluate,
     async click(selector) {
       const box = await evaluate<{ x: number; y: number } | null>(
-        `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`,
+        `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return null; el.scrollIntoView({ block: 'center' }); const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`,
       );
       if (box === null) throw new Error(`no element ${selector}`);
       for (const type of ['mousePressed', 'mouseReleased']) {

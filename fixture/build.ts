@@ -38,8 +38,8 @@ for (const version of versions) {
 
   const target = join(outDir, `react-${version}`);
   await build({
-    entryPoints: [join(root, 'app/src/main.jsx')],
-    outfile: join(target, 'app.js'),
+    entryPoints: { app: join(root, 'app/src/main.jsx'), lab: join(root, 'app/src/lab.jsx') },
+    outdir: target,
     bundle: true,
     format: 'iife',
     platform: 'browser',
@@ -51,24 +51,31 @@ for (const version of versions) {
     define: { 'process.env.NODE_ENV': '"development"' },
     alias: { react, 'react-dom': reactDom },
     sourcemap: 'linked',
+    // Map sources resolve to repo-relative paths, like fixture/app/src/App.jsx.
+    sourceRoot: `fixture/dist/react-${version}/`,
     logLevel: 'warning',
   });
-  writeFileSync(
-    join(target, 'index.html'),
-    `<!doctype html>
+  for (const [page, script, title] of [
+    ['index.html', 'app.js', 'fixture'],
+    ['lab.html', 'lab.js', 'lab'],
+  ]) {
+    writeFileSync(
+      join(target, page!),
+      `<!doctype html>
 <html>
   <head>
     <meta charset="utf-8" />
     <link rel="icon" href="data:," />
-    <title>react-log fixture, React ${version}</title>
+    <title>react-log ${title}, React ${version}</title>
   </head>
   <body>
     <div id="root"></div>
-    <script src="app.js"></script>
+    <script src="${script}"></script>
   </body>
 </html>
 `,
-  );
+    );
+  }
   const kb = (statSync(join(target, 'app.js')).size / 1024).toFixed(0);
   console.log(`react-${version}  ${join('fixture/dist', `react-${version}`, 'app.js')}  ${kb} KB`);
 }
@@ -85,7 +92,7 @@ writeFileSync(
   </head>
   <body>
     <ul>
-${versions.map((v) => `      <li><a href="/react-${v}/">React ${v}</a></li>`).join('\n')}
+${versions.map((v) => `      <li>React ${v}: <a href="/react-${v}/">tree</a>, <a href="/react-${v}/lab.html">lab</a></li>`).join('\n')}
     </ul>
   </body>
 </html>

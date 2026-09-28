@@ -41,6 +41,17 @@ export default defineConfig({
       {
         extends: true,
         test: {
+          name: 'capture',
+          environment: 'node',
+          include: ['tests/capture/**/*.test.ts'],
+          globalSetup: ['tests/browser/setup.ts'],
+          testTimeout: 120_000,
+          hookTimeout: 120_000,
+        },
+      },
+      {
+        extends: true,
+        test: {
           name: 'browser',
           environment: 'node',
           include: ['tests/browser/**/*.test.ts'],

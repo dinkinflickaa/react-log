@@ -1,5 +1,6 @@
 import { laneClassIndex, laneClassOf } from './constants.ts';
 import { K_EFFECT_SPAN, K_LAYOUT_EFFECT, K_PASSIVE_EFFECT, K_SUSPEND, K_UPDATE, K_YIELD } from './ring.ts';
+import { recordEntry } from './observer.ts';
 import { captureStack } from './stack.ts';
 import { type Fiber, newCommit, now, type Renderer, type Shim } from './state.ts';
 import { settlePassive } from './walk.ts';
@@ -155,7 +156,9 @@ const UPDATE_MEASURES = new Set(['Update', 'Cascading Update', 'Update Blocked',
 
 // React 19.2+: React's own Performance Track calls. Installed before React
 // loads, because React reads console.createTask once at module init. Each
-// wrapper does a couple of comparisons and always forwards the call.
+// wrapper does a couple of comparisons and always forwards the call. On every
+// version the performance.measure wrapper also records the app's measures:
+// React's own all carry detail.devtools and are left out.
 export function installTracks(s: Shim): void {
   const g = s.g;
   const con = g.console;
@@ -191,18 +194,25 @@ export function installTracks(s: Shim): void {
   const perf = g.performance;
   if (perf != null && typeof perf.measure === 'function') {
     const measure = perf.measure;
+    const recordApp = s.config.observe.includes('measure');
     perf.measure = function (this: unknown, name: unknown, options: any) {
-      if (options != null && typeof options === 'object' && options.detail != null && typeof name === 'string') {
-        const devtools = options.detail.devtools;
-        if (devtools != null) {
-          try {
-            onDevtoolsMeasure(s, name, options, devtools);
-          } catch (e) {
-            report(s, e);
-          }
+      const devtools = options != null && typeof options === 'object' && options.detail != null ? options.detail.devtools : undefined;
+      if (devtools != null && typeof name === 'string') {
+        try {
+          onDevtoolsMeasure(s, name, options, devtools);
+        } catch (e) {
+          report(s, e);
         }
       }
-      return measure.apply(this, arguments as unknown as unknown[]);
+      const entry = measure.apply(this, arguments as unknown as unknown[]);
+      if (devtools == null && recordApp && entry != null && typeof entry === 'object') {
+        try {
+          recordEntry(s, entry as PerformanceEntry);
+        } catch (e) {
+          report(s, e);
+        }
+      }
+      return entry;
     };
   }
 }
@@ -291,7 +301,6 @@ function onUpdateTask(s: Shim, method: string): void {
 // and the lane track. It is logged when the render starts; the matching
 // console.createTask capture holds the time and stack of the setState call.
 function onDevtoolsMeasure(s: Shim, name: string, options: any, devtools: any): void {
-  if (name.charCodeAt(0) !== 0x200b) s.devtoolsMeasures.add(name);
   if (devtools.trackGroup !== SCHEDULER || !UPDATE_MEASURES.has(name)) return;
   let component: string | null = null;
   let method: string | null = null;

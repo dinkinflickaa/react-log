@@ -45,24 +45,31 @@ function runIdle(s: Shim, deadline: IdleDeadline | null): void {
   let budget = s.config.sliceMs;
   if (deadline !== null) budget = Math.min(budget, Math.max(1, deadline.timeRemaining()));
   try {
-    // Leave room for JSON.stringify and the sink call inside the slice.
-    drain(s, t0 + budget * 0.6);
+    // Serialize for 30% of the budget. The rest is headroom for the sink call
+    // (about 0.35 ms for a full payload) and for a GC or a preemption that
+    // lands in the slice.
+    drain(s, t0 + budget * 0.3);
   } catch (e) {
     report(s, e);
   }
   const dt = now() - t0;
+  if (dt > s.stats.maxIdleMs) s.stats.maxIdleMs = dt;
   if (dt > s.stats.maxTaskMs) s.stats.maxTaskMs = dt;
   if (s.ring.count > 0 || s.outbox.length > 0) scheduleIdle(s);
 }
 
-// Everything, now, ignoring the slice budget: tests and pagehide.
+// Everything, now, ignoring the slice budget: tests and pagehide. Each
+// drain sends one payload of about 24 KB, so loop until the ring is empty.
 export function flushNow(s: Shim): void {
-  try {
-    drain(s, Infinity);
-  } catch (e) {
-    report(s, e);
-    drain(s, Infinity);
-  }
+  if (typeof s.g.__reactLogSink !== 'function') return;
+  do {
+    try {
+      drain(s, Infinity);
+    } catch (e) {
+      report(s, e);
+    }
+  } while (s.ring.count > 0);
+  drain(s, Infinity);
 }
 
 function drain(s: Shim, until: number): void {
@@ -71,9 +78,13 @@ function drain(s: Shim, until: number): void {
   while (s.outbox.length > 0) sink(s.outbox.shift());
   expireTasks(s);
   const ring = s.ring;
-  const rows: unknown[][] = [];
+  const rows: string[] = [];
+  let bytes = 0;
   while (ring.count > 0) {
     const i = ring.peek();
+    // Formatting a stack can take a millisecond or more, so a slice formats
+    // at most one, as its first row.
+    if (rows.length > 0 && ring.kind[i] === K_UPDATE && ring.r2[i] != null) break;
     let row: unknown[] | null = null;
     try {
       row = serialize(s, i);
@@ -81,21 +92,31 @@ function drain(s: Shim, until: number): void {
       report(s, e);
     }
     ring.release(i);
-    if (row !== null) rows.push(row);
+    if (row !== null) {
+      const json = JSON.stringify(row);
+      rows.push(json);
+      bytes += json.length;
+    }
     // A row can cost a stack format, so check the clock after every one.
-    if (now() > until) break;
+    // The CDP binding costs about 15 µs per KB, so payloads stay near 24 KB.
+    if (now() > until || bytes + s.defBytes > 24_000) break;
   }
   const dropped = ring.dropped - s.lastDropped;
   if (rows.length === 0 && s.defs.length === 0 && dropped === 0) {
     while (s.outbox.length > 0) sink(s.outbox.shift());
     return;
   }
-  const message = JSON.stringify({ t: 'batch', seq: s.seq++, dropped, defs: s.defs, rows });
+  const message = `{"t":"batch","seq":${s.seq++},"dropped":${dropped},"defs":${JSON.stringify(s.defs)},"rows":[${rows.join(',')}]}`;
   s.lastDropped = ring.dropped;
   s.defs = [];
+  s.defBytes = 0;
   s.stats.batches++;
   s.stats.rows += rows.length;
+  if (message.length > s.stats.maxBatchBytes) s.stats.maxBatchBytes = message.length;
+  const t = now();
   sink(message);
+  const sinkMs = now() - t;
+  if (sinkMs > s.stats.maxSinkMs) s.stats.maxSinkMs = sinkMs;
   while (s.outbox.length > 0) sink(s.outbox.shift());
 }
 

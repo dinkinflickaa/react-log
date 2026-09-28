@@ -11,6 +11,9 @@ export interface Config {
   sliceMs: number;
   stacksPerBatch: number;
   watch: string[];
+  // Entry types to record: event, mark and long-animation-frame through a
+  // PerformanceObserver, measure through the performance.measure wrapper.
+  observe: string[];
 }
 
 export const DEFAULT_CONFIG: Config = {
@@ -19,6 +22,7 @@ export const DEFAULT_CONFIG: Config = {
   sliceMs: 4,
   stacksPerBatch: 8,
   watch: [],
+  observe: ['event', 'mark', 'measure', 'long-animation-frame'],
 };
 
 export interface Renderer {
@@ -66,7 +70,12 @@ export interface Stats {
   commits: number;
   walkMs: number;
   maxWalkMs: number;
+  // Longest shim task: an idle slice or an observer callback.
   maxTaskMs: number;
+  maxIdleMs: number;
+  maxObserverMs: number;
+  maxSinkMs: number;
+  maxBatchBytes: number;
   batches: number;
   rows: number;
 }
@@ -94,12 +103,12 @@ export interface Shim {
   pendingTasks: { method: string; t: number; transition: boolean; event: string | null; stack: Error | null }[];
   pendingTrigger: string | null;
   pendingTriggerAt: number;
-  devtoolsMeasures: Set<string>;
   // Idle pipeline state.
   idByFiber: WeakMap<object, string>;
   idByPath: Map<string, string>;
   stackOwner: WeakMap<object, string>;
   defs: unknown[][];
+  defBytes: number;
   outbox: string[];
   watch: Set<string>;
   errors: Set<string>;
@@ -116,7 +125,7 @@ export function createShim(g: any, config: Config): Shim {
     g,
     config,
     ring: new Ring(config.ringSize),
-    stats: { commits: 0, walkMs: 0, maxWalkMs: 0, maxTaskMs: 0, batches: 0, rows: 0 },
+    stats: { commits: 0, walkMs: 0, maxWalkMs: 0, maxTaskMs: 0, maxIdleMs: 0, maxObserverMs: 0, maxSinkMs: 0, maxBatchBytes: 0, batches: 0, rows: 0 },
     renderers: new Map(),
     tracksRenderer: null,
     commitSeq: 0,
@@ -132,11 +141,11 @@ export function createShim(g: any, config: Config): Shim {
     pendingTasks: [],
     pendingTrigger: null,
     pendingTriggerAt: 0,
-    devtoolsMeasures: new Set(),
     idByFiber: new WeakMap(),
     idByPath: new Map(),
     stackOwner: new WeakMap(),
     defs: [],
+    defBytes: 0,
     outbox: [],
     watch: new Set(config.watch),
     errors: new Set(),

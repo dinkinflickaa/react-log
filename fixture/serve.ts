@@ -4,7 +4,8 @@ import { dirname, extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // Serves fixture/dist cross-origin isolated (COOP + COEP), so performance.now()
-// ticks in 5 µs steps instead of 100 µs.
+// ticks in 5 µs steps instead of 100 µs. isolate: false serves it plain, as
+// most dev servers do, to test capture --isolate.
 
 const distDir = join(dirname(fileURLToPath(import.meta.url)), 'dist');
 
@@ -22,7 +23,8 @@ const ISOLATION_HEADERS = {
   'Cache-Control': 'no-store',
 };
 
-export function startFixtureServer(port: number): Promise<Server> {
+export function startFixtureServer(port: number, opts: { isolate?: boolean } = {}): Promise<Server> {
+  const headers = opts.isolate === false ? { 'Cache-Control': 'no-store' } : ISOLATION_HEADERS;
   const server = createServer(async (req, res) => {
     const pathname = decodeURIComponent(new URL(req.url ?? '/', 'http://localhost').pathname);
     const relative = normalize(pathname.endsWith('/') ? `${pathname}index.html` : pathname);
@@ -34,12 +36,12 @@ export function startFixtureServer(port: number): Promise<Server> {
     try {
       const body = await readFile(file);
       res.writeHead(200, {
-        ...ISOLATION_HEADERS,
+        ...headers,
         'Content-Type': TYPES[extname(file)] ?? 'application/octet-stream',
       });
       res.end(body);
     } catch {
-      res.writeHead(404, ISOLATION_HEADERS).end('not found');
+      res.writeHead(404, headers).end('not found');
     }
   });
   return new Promise((resolve, reject) => {

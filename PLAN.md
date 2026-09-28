@@ -69,7 +69,8 @@ The hook's presence alone turns on React's per-fiber timers in 18.x, 19.0 and 19
 2. Everything else runs in idle slices of at most 4 ms: diffs, component_id hashing (cached per fiber), stack formatting, serialization and flushing.
 3. Stacks are captured only for updates, at most `stacksPerBatch` per batch, with `Error.stackTraceLimit` lowered during capture and formatting deferred.
 4. The ring buffer never grows. On overflow the incoming event is dropped and counted as a dropped row.
-5. Benchmark method. The fixture server sends COOP and COEP, so timers tick at 5 µs. Input goes through CDP `Input.dispatchMouseEvent` and `Input.dispatchKeyEvent`, because Event Timing ignores untrusted events. Each run is timed in the page, from the input event's timestamp to the first frame after the commit, since Event Timing rounds durations to 8 ms, too coarse for a 5% bar. Shim-on and no-hook page loads alternate: 3 loads per mode, 5 warm-up plus 10 measured runs per load. The shim times its own idle slices and flushes and reports the longest.
+5. Benchmark method. The fixture server sends COOP and COEP, so timers tick at 5 µs. Input goes through CDP `Input.dispatchMouseEvent`, because Event Timing ignores untrusted events. Each run is timed in the page, from the click's `event.timeStamp` to a bubble-phase click listener on `document`, which runs after React's synchronous commit and passive effects. Event Timing rounds durations to 8 ms, too coarse for a 5% bar, and timing to the first frame after the commit adds up to 16.7 ms of frame-alignment noise, more than the whole small interaction. Shim work that can land between that listener and the next frame (PerformanceObserver callbacks, idle slices) counts toward the 4 ms task bar instead. Each load opens one tab per mode and the clicks alternate between the tabs, so drift hits both modes alike: 3 loads, 5 warm-up plus 10 measured runs per interaction per tab, a full GC and every shim tab flushed before each click. The shim times its own idle slices and observer callbacks and reports the longest.
+6. Click spacing. Every click comes at least 1.1 s after the same tab's previous one. React 19 dev builds capture an owner stack (an `Error` and a `console.createTask`) for only the first 10,000 JSX elements in each window of at least one second, reset when a render starts (`prepareFreshStack`). Clicks closer together skip those stacks once the window's budget is spent, so the large interaction measured anywhere from about 45 to 150 ms in both modes, depending only on spacing. With the gap, every measured render pays for its stacks, as an interaction a person makes does.
 
 ## Timer precision
 
@@ -102,9 +103,9 @@ Parquet per session under `segments/<session_id>/`. File families are `seg-*.par
 ```
 events(session_id, page_load_id, ts, dur_us, self_us, kind, lane, component_id,
        commit_id, reason_code, changed_hooks, changed_context, changed_keys, committed,
-       root_update_id, measure_instance_id, on_critical_path, call_site)
+       root_update_id, measure_instance_id, on_critical_path, call_site, extra)
 
-defs(component_id, display_name, source_file, source_line, owner_path)
+defs(component_id, display_name, source_file, source_line, source_column, owner_path)
 
 measures(measure_instance_id, session_id, name, source, interaction_id, ts_start,
          ts_end_marker, ts_end_paint, ts_end_idle)
@@ -117,6 +118,8 @@ commits(commit_id, session_id, ts, measure_instance_id, on_critical_path, signat
 ```
 
 Event kinds. update_enqueued, render, bailout_count, commit, layout_effect, passive_effect, suspend, yield, mark, measure, loaf, event_timing, watch, dropped.
+
+`extra` is a JSON column for what one kind needs and the others do not: a commit's phase boundaries, root, priority and counts; an effect's mount or unmount phase; an update's method, phase, event and label; Event Timing's name, `interactionId`, processing times and target; a long animation frame's top scripts; a watch row's names; a dropped row's count. Its time fields are epoch microseconds like `ts`. `ts` is epoch microseconds, converted from the page clock with the page load's `timeOrigin`.
 
 Definitions.
 
@@ -160,14 +163,14 @@ Definitions.
 2. Core commit walk, version-keyed masks, reference capture.
 3. Adapter for 18.0 to 19.1 and adapter for 19.2+.
 4. Idle pipeline: why-data, component_id, stacks, serialization.
-5. A PerformanceObserver forwards event (with `interactionId`), mark, measure and long-animation-frame entries into the same buffer.
+5. A PerformanceObserver forwards event (with `interactionId`), mark and long-animation-frame entries into the same buffer. The app's own `performance.measure` calls come from the measure wrapper instead (Decision log 15).
 6. Ring buffer of 50k rows in typed arrays, flushed every 250 ms in idle slices through `window.__reactLogSink(json)`, the CDP binding. Tests stub the sink. v1's localhost POST fallback is dropped.
 
 Acceptance. The jsdom unit suite on every matrix version asserts the event sequence, `self_us`, `committed` values, reason codes, changed hooks and changed context for a ten-component tree. The headless Chromium browser suite on every matrix version asserts the same end to end, plus per-component effect times and at least one update call site on every version, and that capture refuses a page whose hook already exists.
 
 ## Phase 2. Capture program and fixture (3 days)
 
-1. `react-log capture` connects to `--cdp`, picks the target by `--url-match`, or launches with `--launch <url>` on the dedicated profile. `--isolate` as above.
+1. `react-log capture` connects to `--cdp`, picks the target by `--url-match`, or launches with `--launch <url>` on the dedicated profile (`--headless` for the cloud session). `--isolate` as above. `--for <seconds>` stops it after a while; otherwise it runs until Ctrl-C, which finishes the current segments first.
 2. `Page.addScriptToEvaluateOnNewDocument` with the shim bundle, `Runtime.addBinding` for `__reactLogSink`, and `--reload` to reinstall on an already loaded page. Each target is its own session. Capture refuses when the React DevTools extension is present.
 3. Ingest converts timestamps with `timeOrigin`, assigns `page_load_id` and `session_id`, writes `session.json` (start, app url, React version, config, git SHA when available), and appends NDJSON to a temp file.
 4. Rotate every 10 seconds or 200k rows. Convert with the DuckDB CLI using the pinned column types, then rename into place. Same for defs, commits and measures files.
@@ -237,6 +240,15 @@ Acceptance. A capture left running for at least an hour in the cloud session aga
 8. React 19 sets the Update flag on every host element whose props object changed, where 18 needs an attribute or handler change. `committed` is now computed from real DOM and effect changes, identically on 18 and 19.
 9. React 19.1+ dev builds run every fiber's render work through `_debugTask.run`, so the shim never wraps `run`: that would sit on the render hot path. On 19.2+ effect spans are matched to fibers by component name and tree order instead.
 10. Event Timing reports interactions of 16 ms or more only; faster ones get no measure.
+
+2026-09-28, Phase 2. Evidence from headless Chromium 141 in the cloud session.
+
+11. A CDP binding only reaches the client with `Runtime.enable`, and new-document scripts only run with `Page.enable`, so capture enables both on every target before injecting.
+12. The binding costs the page about 15 µs per KB of payload, synchronously. With whole-ring batches (400 to 850 KB) the idle task reached 7.7 ms. The shim now serializes row by row inside its slice, stops at 30% of the budget, and caps a payload at 24 KB, with defs counted.
+13. React clears Placement on a placed or moved fiber during the mutation phase, before `onCommitFiberRoot`. The walk reads insertions and moves from the parent's `subtreeFlags`, which keep them.
+14. React 19 dev captures owner stacks for only the first 10,000 elements per window of at least one second. The benchmark spaces clicks 1.1 s apart, otherwise it measures click spacing rather than overhead (Overhead, item 6).
+15. React 19.2+ logs a `performance.measure` for every re-rendered component whose props changed, and clears it at once. Observing measures handed the shim 3,000 entries per click on the large interaction and a 7.65 ms observer callback. The shim no longer observes measures; its `performance.measure` wrapper records the app's own (React's all carry `detail.devtools`).
+16. On stop, capture asks every page to flush its ring before closing the browser, so the last quarter second of rows is not lost.
 
 ## Kickoff prompt for Claude Code
 

@@ -18,6 +18,30 @@ pnpm test
 pnpm exec react-log --help
 ```
 
+## Capture
+
+```sh
+# Launch a dedicated Chrome profile on the app and record until Ctrl-C
+pnpm exec react-log capture --launch http://localhost:3000/ [--headless] [--isolate]
+
+# Or attach to a Chrome started with --remote-debugging-port=9222
+pnpm exec react-log capture --cdp http://localhost:9222 --url-match localhost:3000 --reload
+
+# While it runs: record which props changed by value for some components
+pnpm exec react-log watch SidebarItem
+
+duckdb -c "SELECT kind, count(*) FROM read_parquet('segments/*/seg-*.parquet') GROUP BY 1"
+```
+
+Each browser tab is a session under `segments/<session_id>/`, with `session.json` and Parquet files that rotate every 10 seconds. The React DevTools extension must be off in the capture profile. `react-log.config.json` holds the defaults.
+
+## Benchmarks
+
+```sh
+node bench/overhead.ts             # shim on vs no hook, React 18.3.1 and 19.3.0 (about 20 min)
+node bench/soak.ts --minutes 60    # capture under scripted load: rows grow, memory flat, nothing dropped
+```
+
 ## Layout
 
 ```
@@ -27,5 +51,6 @@ packages/cli         react-log binary
 fixture/app          demo app, plain JSX
 fixture/versions     one package per React version in the test matrix
 skills/react-log/    the Claude Code skill
+bench/               overhead benchmark and soak test, headless Chromium
 tests/               vitest suites
 ```
