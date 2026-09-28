@@ -1,0 +1,61 @@
+{
+  "session_id": "20260928-145934-9k7y",
+  "target_id": "DAF8E5E6CC7A21B2895C273E44458439",
+  "app_url": "http://127.0.0.1:36455/react-19.3.0/lab.html",
+  "started_at": "2026-09-28T14:59:34.402Z",
+  "ended_at": "2026-09-28T15:00:00.813Z",
+  "react_version": "19.3.0",
+  "renderers": [
+    {
+      "t": "renderer",
+      "id": 1,
+      "version": "19.3.0",
+      "line": "19.2+",
+      "bundleType": 1,
+      "package": "react-dom"
+    }
+  ],
+  "shim_version": "0.1.0",
+  "git_sha": "d57dd64ccd0439013a4444a996865995d0ecfd4e",
+  "config": {
+    "cdp": "http://localhost:9222",
+    "urlMatch": "127.0.0.1",
+    "launch": {
+      "chromePath": null,
+      "userDataDir": "/tmp/react-log-golden-Kurha3/profile-golden",
+      "isolate": false
+    },
+    "interactions": {
+      "eventTiming": true
+    },
+    "measures": [],
+    "record": {
+      "compositeOnly": true,
+      "values": false,
+      "stacksOn": [
+        "update"
+      ],
+      "stacksPerBatch": 8,
+      "watch": []
+    },
+    "segments": {
+      "dir": "/tmp/react-log-golden-Kurha3/golden",
+      "rotateSeconds": 2,
+      "rotateRows": 200000
+    }
+  },
+  "page_loads": [
+    {
+      "page_load_id": 1,
+      "url": "http://127.0.0.1:36455/react-19.3.0/lab.html",
+      "token": "12tpov22q13",
+      "time_origin": 1790607574306.07
+    }
+  ],
+  "refused": null,
+  "errors": [],
+  "rows": 18707,
+  "commits": 22,
+  "measures": 21,
+  "dropped": 0
+}

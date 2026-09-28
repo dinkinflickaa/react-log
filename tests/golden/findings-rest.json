@@ -1,0 +1,78 @@
+[
+  {
+    "commit_id": "20260928-145934-9k7y.1.10",
+    "signature": "sig_0741746d40",
+    "measure": "click",
+    "on_critical_path": true,
+    "total_ms": 10.3,
+    "cause": {
+      "producer": "ShellProvider",
+      "call_site": "addToCart (fixture/app/src/lab/Lab.jsx:38:70)",
+      "trigger": "click",
+      "cascade": false
+    },
+    "extent": {
+      "rendered": 202,
+      "committed": 2,
+      "noop": 200,
+      "top_type": "ThemeBadge",
+      "top_type_count": 200
+    },
+    "shares": {
+      "top1": 0.02,
+      "noop": 0.51,
+      "effect": 0.0
+    },
+    "fix_class": "narrow_input",
+    "fix_summary": "Split ShellContext at ShellProvider so the state addToCart sets moves to its own context read by CartButton, and the 200 ThemeBadge consumers, which re-render on ShellContext and commit nothing, stop re-rendering.",
+    "patch": "fixture/app/src/lab/Lab.jsx",
+    "bail_reason": null,
+    "components": [
+      "ShellProvider",
+      "ThemeBadge",
+      "CartButton"
+    ],
+    "evidence_query": "SELECT round(c.total_ms, 1) AS total_ms, c.rendered, c.committed, c.noop, c.top_type_count, round(c.top1_share, 2) AS top1_share, round(c.noop_share, 2) AS noop_share, round(c.effect_share, 2) AS effect_share, (SELECT round(median(s.total_ms), 1) FROM commits s WHERE s.signature = c.signature AND s.session_id = c.session_id) AS before_p50_ms FROM commits c WHERE c.commit_id = '20260928-145934-9k7y.1.10';",
+    "before_after": {
+      "before_p50_ms": 8.9,
+      "after_p50_ms": null
+    }
+  },
+  {
+    "commit_id": "20260928-145934-9k7y.1.8",
+    "signature": "sig_000ba17a08",
+    "measure": "click",
+    "on_critical_path": true,
+    "total_ms": 0.9,
+    "cause": {
+      "producer": "Toggle",
+      "call_site": "onClick (fixture/app/src/lab/Lab.jsx:281:44)",
+      "trigger": "click",
+      "cascade": false
+    },
+    "extent": {
+      "rendered": 1,
+      "committed": 1,
+      "noop": 0,
+      "top_type": "Toggle",
+      "top_type_count": 1
+    },
+    "shares": {
+      "top1": 0.26,
+      "noop": 0.0,
+      "effect": 0.0
+    },
+    "fix_class": null,
+    "fix_summary": "Toggle's commit has total_ms 0.9, under the within_budget line (the table's first row), so no fix pays for itself; the click's latency is mostly waiting outside this commit, not React work.",
+    "patch": null,
+    "bail_reason": "within_budget",
+    "components": [
+      "Toggle"
+    ],
+    "evidence_query": "SELECT round(c.total_ms, 1) AS total_ms, c.rendered, c.committed, c.noop, c.top_type_count, round(c.top1_share, 2) AS top1_share, round(c.noop_share, 2) AS noop_share, round(c.effect_share, 2) AS effect_share, (SELECT round(median(s.total_ms), 1) FROM commits s WHERE s.signature = c.signature AND s.session_id = c.session_id) AS before_p50_ms FROM commits c WHERE c.commit_id = '20260928-145934-9k7y.1.8';",
+    "before_after": {
+      "before_p50_ms": 0.5,
+      "after_p50_ms": null
+    }
+  }
+]

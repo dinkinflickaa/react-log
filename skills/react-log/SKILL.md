@@ -9,30 +9,38 @@ description: Analyze react-log capture sessions (Parquet segments under ./segmen
 
 1. `duckdb` CLI on PATH.
 2. A segments directory (default `./segments`) with at least one session.
-3. Optionally the `react-log` CLI for `capture`, `watch`, `sessions`, `top`, `card`, `query`. Everything below also works with plain SQL from `references/queries.md`.
+3. The `react-log` CLI (`pnpm exec react-log` inside the react-log repo) for `capture`, `watch`, `sessions`, `top`, `card`, `query`. Add `--segments <dir>` when the directory is not `./segments`. Everything also works with plain SQL from `references/queries.md`: load its `views` block first, then run queries by name with the placeholders filled in.
 
-Start every DuckDB session by loading the views at the top of `references/queries.md`, then run queries by name from that file, substituting the placeholders.
+## What is in a session
+
+- `events`: one row per render, effect, commit, update, interaction entry and long frame. `root_update_id` ties every row to the chain of updates that caused it; a commit with `cascade_commit_id` came from an update that an effect of that commit enqueued.
+- `commits`: one row per commit, with its cost split (render, layout, passive), fan-out (rendered, committed, noop), producer, call site, trigger, lane, `signature` (the kind of commit, stable across captures and fixes) and three shares of its total: `top1_share` (the costliest component's own render), `noop_share` (renders that changed nothing), `effect_share` (effects).
+- `measures`: one row per interaction (a click or keypress of 16 ms or more) or configured mark pair, its duration split into on-path work, interference and waiting. A commit on a measure's critical path has `on_critical_path` true.
+- `defs`: component names and where each component's element is created.
 
 ## Method, in this order
 
-1. Pick the session. Run `sessions`. Use the newest unless told otherwise.
-2. Rank commits. Run `top_commits` and `p95_cutoff`. A commit is worth examining if `total_ms` is above 8 ms on the critical path, above 16 ms anywhere, or above the session's p95. Take at most five.
-3. Build the card for each commit. Run `card_header`, `card_chain`, `card_self`, `card_effects`, `card_fanout`, `card_reasons`. Answer the five questions and write them down before deciding anything. Cause (root update, producer, call site, trigger, lane, cascade, and for the top components which hook or context changed). Extent (rendered, committed, noop, distinct types, top type and its count). Self cost (top five, top1_share). Effects (layout and passive totals, top instance, passive_sync). Concentration (top1_share, noop_share, effect_share).
-4. Decide with the table below. The dominant share names the fix class. If the verdict depends on whether props changed by identity only or by value, do not guess. Run `react-log watch <name>`, ask the user for one more capture of the same interaction, then run `card_changed_keys`.
-5. Act. For a fix class, write the smallest patch in the fix vocabulary, apply it, ask for a re-capture of the same interaction, and run `signature_before_after`. Report both numbers. For a bail, write the reason and the evidence and stop.
+1. Pick the session. Run `react-log sessions`. Use the newest unless told otherwise.
+2. Rank. Run `react-log top --session <id>`, then `top_signatures` and `p95_cutoff`. Work per signature, through its `worst_commit`. A signature is worth examining if its worst commit is above 8 ms on a measure's critical path, above 16 ms anywhere, or above the session's p95. Skip the page's first render (on no measure, and its card's `why` line is nearly all `mount`) unless the user asks about load. Take at most five, most expensive first.
+3. Read the card. Run `react-log card <commit_id>` for each. It is the canonical view: signature and lane; total and its split; the measure and whether this commit is on its critical path; cause (trigger, producer, call site); chain root and cascade; extent; shares; `why` (render reasons and counts); self cost, top five, with each component's reason and what changed; effects; and the cause chain. Answer the five questions and write them down before deciding anything. Cause (trigger, producer, call site, lane, cascade, and for the top components which hook, context or prop changed). Extent (rendered, committed, noop, top type and its count). Self cost (top five, top1_share). Effects (layout and passive totals, top instance, passive_sync). Concentration (top1_share, noop_share, effect_share). The `card_*` queries give more rows than the card shows.
+4. Decide with the decision table below.
+5. Act. For a fix class, write the smallest patch in the fix vocabulary, apply it, ask for a re-capture of the same interaction, and run `signature_before_after`. Report both numbers. For a bail, write the reason and the evidence and stop. When asked for findings only, stop after step 4: write `findings.json`, apply nothing, and leave `after_p50_ms` null.
 
 ## Decision table
 
-| Dominant share | Fix class | What the patch usually is |
-| --- | --- | --- |
-| top1_share | hoist_render_work | move computation out of the render body, useMemo it, or move it above the component |
-| noop_share, producer is a callback or object | stabilize_producer | useCallback or useMemo at the producer |
-| noop_share, producer is a context or store | narrow_input | split the context or narrow the selector |
-| noop_share, reason is parent | memo_boundary | React.memo the component whose subtree commits nothing |
-| effect_share | effect_shape | split, defer or cache effect work, fix deps, move layout reads before writes |
-| no dominant share, most renders committed | bail | diffuse_genuine_work |
+A share is dominant when it is at least 0.5. A commit has no-op fan-out when one type renders at least 100 times in it and at least 80% of its renders commit nothing. Take the first row that matches.
 
-Extent overrides. If one commit renders hundreds of instances of one type and most of them commit nothing, the fix is at the producer (`producers_noop` query), not at the instances.
+| Evidence | Verdict | What the patch usually is |
+| --- | --- | --- |
+| total_ms under 8 | bail within_budget | none: no fix pays for itself |
+| effect_share dominant | effect_shape | split, defer or cache effect work, fix deps, move layout reads before writes |
+| top1_share dominant | hoist_render_work | move computation out of the render body, useMemo it, or move it to module scope |
+| noop_share dominant or no-op fan-out, and the no-op renders' reason is `context` (or a store hook in `changed_hooks`) | narrow_input | split the context or narrow the selector, at the provider |
+| same, reason `props`, and `changed_keys` says `identity_only` for a function or object prop | stabilize_producer | useCallback or useMemo for that prop where the producer creates it |
+| same, reason `parent` (props equal, the parent re-rendered) | memo_boundary | React.memo the highest component whose subtree commits nothing |
+| no dominant share, most renders committed | bail diffuse_genuine_work | none: the work is the output |
+
+If the verdict depends on whether props changed by identity only or by value and `changed_keys` is empty, do not guess. Run `react-log watch <name>`, ask the user for one more capture of the same interaction, then run `card_changed_keys`. If no capture is possible, bail design_change and name the component to watch. Anything the table does not cover is a bail with reason design_change.
 
 ## Fix vocabulary, only these
 
@@ -42,39 +50,47 @@ Extent overrides. If one commit renders hundreds of instances of one type and mo
 4. hoist_render_work
 5. effect_shape
 
-Anything outside this list is a bail with reason design_change.
-
 ## Bail vocabulary, only these
 
 diffuse_genuine_work, within_budget, variance_too_high, third_party_owned, necessary_io_in_effect, design_change
 
 ## Output
 
-Write `findings.json`. One entry per commit examined, fix or bail, never both empty.
+Write `findings.json`: a JSON array with one entry per signature examined, most expensive first. Each entry has a fix or a bail, never both and never neither. The example is from an unrelated app.
 
 ```json
-{
-  "commit_id": "c_000412",
-  "signature": "sig_9f1c",
-  "measure": "route_switch",
-  "on_critical_path": true,
-  "total_ms": 14.2,
-  "cause": { "producer": "Sidebar", "call_site": "src/sidebar/Sidebar.tsx:41", "trigger": "click", "cascade": false },
-  "extent": { "rendered": 312, "committed": 22, "noop": 290, "top_type": "SidebarItem", "top_type_count": 300 },
-  "shares": { "top1": 0.08, "noop": 0.71, "effect": 0.12 },
-  "fix_class": "stabilize_producer",
-  "fix_summary": "wrap onSelect in useCallback so SidebarItem props keep identity",
-  "patch": "src/sidebar/Sidebar.tsx",
-  "bail_reason": null,
-  "evidence_query": "card_fanout WHERE commit_id = 'c_000412'",
-  "before_after": { "before_p50_ms": 14.2, "after_p50_ms": null }
-}
+[
+  {
+    "commit_id": "20260301-101500-q7xa.1.42",
+    "signature": "sig_03c9a1e2f4",
+    "measure": "keydown",
+    "on_critical_path": true,
+    "total_ms": 38.4,
+    "cause": { "producer": "SearchBox", "call_site": "onChange (src/search/SearchBox.jsx:31:7)", "trigger": "keydown", "cascade": false },
+    "extent": { "rendered": 251, "committed": 12, "noop": 239, "top_type": "ResultRow", "top_type_count": 240 },
+    "shares": { "top1": 0.11, "noop": 0.62, "effect": 0.04 },
+    "fix_class": "stabilize_producer",
+    "fix_summary": "useCallback for onHover in ResultsList, so ResultRow's memo holds when the query changes",
+    "patch": "src/search/ResultsList.jsx",
+    "bail_reason": null,
+    "components": ["SearchBox", "ResultsList", "ResultRow"],
+    "evidence_query": "SELECT round(c.total_ms, 1) AS total_ms, ... WHERE c.commit_id = '20260301-101500-q7xa.1.42';",
+    "before_after": { "before_p50_ms": 35.9, "after_p50_ms": null }
+  }
+]
 ```
+
+1. `commit_id` is the signature's worst commit; `signature`, `measure` and `on_critical_path` come from its card.
+2. `total_ms`, `extent`, `shares` and `before_after.before_p50_ms` are exactly what the `finding_numbers` query returns for the commit, rounded as it rounds.
+3. `evidence_query` is the `finding_numbers` query with the commit id filled in, complete, runnable as written after the views.
+4. `cause.producer` is the card's producer; `cause.cascade` is true when the card says `cascade of`.
+5. `components` lists every component the entry names anywhere, spelled as in `defs.display_name`.
+6. For a fix: `patch` is the file the fix edits (the component's `source_file` in defs) and `fix_summary` names the component and the change in one sentence. For a bail: `fix_class` and `patch` are null, and `fix_summary` says in one sentence which evidence decided it.
 
 ## Guardrails
 
 1. Never restructure components, change behavior, or touch third-party code.
 2. One fix per PR. Include the card and both numbers.
-3. Every number in a finding comes from a query pasted in `evidence_query`.
+3. Every number in a finding comes from `evidence_query`.
 4. Never capture or print prop values. `changed_keys` is enough.
 5. Stop after two failed attempts on the same commit and bail with variance_too_high or design_change.

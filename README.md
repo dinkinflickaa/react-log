@@ -46,6 +46,17 @@ pnpm exec react-log query "SELECT name, count(*), median(duration_ms) FROM measu
 
 `query` runs DuckDB with four views loaded, over all sessions or one (`--session`): `events`, `defs`, `commits` and `measures`. `--json` and `--csv` change the output format.
 
+## The skill
+
+`skills/react-log/SKILL.md` is a Claude Code skill: it ranks a session's commits, reads each one's card, and either proposes a fix from a fixed vocabulary (stabilize_producer, narrow_input, memo_boundary, hoist_render_work, effect_shape) or bails with a named reason, writing `findings.json`. `skills/react-log/references/queries.md` holds its SQL.
+
+`tests/golden/segments/` is a recorded session of the lab's planted bugs (React 19.3.0), checked in so fixture changes cannot move the goalposts. `tests/golden/findings.json` is the skill's own run on it.
+
+```sh
+node tests/golden/record.ts                       # re-record the golden session
+node tests/skill/findings.ts <findings.json>      # check a run: vocabulary, evidence re-executes, components exist, planted bugs classified
+```
+
 ## Benchmarks
 
 ```sh
@@ -63,7 +74,7 @@ packages/capture     CDP client, ingest, chain linker, rollups, segment writer
 packages/cli         react-log binary
 fixture/app          demo app, plain JSX: the lab (benchmark interactions and planted bugs) and the chains page (what the chain linker connects)
 fixture/versions     one package per React version in the test matrix
-skills/react-log/    the Claude Code skill
+skills/react-log/    the Claude Code skill and its queries
 bench/               overhead benchmark, soak test and Phase 3 acceptance checks
-tests/               vitest suites
+tests/               vitest suites; tests/golden holds the golden session and the skill's findings on it
 ```

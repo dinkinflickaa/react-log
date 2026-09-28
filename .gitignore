@@ -1,5 +1,7 @@
 node_modules/
 dist/
 segments/
+# The golden session is data the tests read.
+!tests/golden/segments/
 *.tsbuildinfo
 .DS_Store

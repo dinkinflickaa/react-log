@@ -52,6 +52,14 @@ export default defineConfig({
       {
         extends: true,
         test: {
+          name: 'skill',
+          environment: 'node',
+          include: ['tests/skill/**/*.test.ts'],
+        },
+      },
+      {
+        extends: true,
+        test: {
           name: 'browser',
           environment: 'node',
           include: ['tests/browser/**/*.test.ts'],
