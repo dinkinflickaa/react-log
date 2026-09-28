@@ -46,6 +46,8 @@ for (const version of versions) {
     target: 'es2022',
     jsx: 'automatic',
     jsxDev: true,
+    // Keep function names as written, as dev servers do; the shim reports them.
+    keepNames: true,
     define: { 'process.env.NODE_ENV': '"development"' },
     alias: { react, 'react-dom': reactDom },
     sourcemap: 'linked',

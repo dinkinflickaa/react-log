@@ -14,7 +14,7 @@ Not a goal at all: running next to the React DevTools extension. react-log is me
 2. Test matrix: 18.0.0, 18.2.0, 18.3.1, 19.0.8, 19.1.9, 19.2.8, 19.3.0. That is the 18.0 floor plus the latest patch of each later minor as of 2026-09-27. Every shim suite runs on every version.
 3. Runtime: CDP only, so it works on any OS and any Chromium browser that exposes CDP. Everything is validated in headless Chromium in the cloud session. No step depends on a local machine.
 4. Target: a demo app in `fixture/` with planted performance bugs, one per fix class plus two that must bail. Phase 5 runs against it.
-5. Interactions: every trusted click and keypress becomes a measure, from Event Timing entries with an `interactionId`. Configured `performance.mark` pairs add named measures for async flows.
+5. Interactions: every trusted click and keypress that takes 16 ms or more becomes a measure, from Event Timing entries with an `interactionId` (16 ms is Event Timing's minimum threshold, so faster interactions leave no entry). Configured `performance.mark` pairs add named measures for async flows.
 6. Overhead: at most 5% added at p50 and at p95 per interaction, and no single shim task over 4 ms. See Overhead.
 
 ## Success criteria
@@ -32,7 +32,7 @@ React 19.2 removed the scheduling-profiler hooks (`injectProfilingHooks`) that v
 Core, all versions. The shim installs `__REACT_DEVTOOLS_GLOBAL_HOOK__` before any page script runs. A hook's presence makes React 18.x, 19.0 and 19.1 keep per-fiber timers (ProfileMode); 19.2+ dev builds keep them anyway. On every `onCommitFiberRoot`, which runs after layout effects and before passive effects in both 18.3.1 and 19.3.0, the shim walks the fibers that rendered in this commit, the same way React DevTools' Profiler does:
 1. A composite fiber rendered when its `PerformedWork` flag (1) is set. A subtree whose `child` pointer equals the alternate's did not render and is skipped, so the walk costs O(rendered fibers).
 2. Timing comes from `actualStartTime` and `actualDuration`. `self_us` is `actualDuration` minus the children's `actualDuration`, the formula React itself uses for its Performance Tracks.
-3. `committed` reads `flags | subtreeFlags` against the version's masks (table below).
+3. `committed` is computed bottom-up during the walk from whether the DOM or an effect actually changed (see Definitions). The Update flag alone would not do: React 19 sets it on every host element whose props object changed, which is nearly every re-render.
 4. It keeps references to the previous and next `memoizedProps`, hook list head (`memoizedState`) and `dependencies.firstContext`. The diffing runs later, in idle time.
 
 Adapter for 18.0 to 19.1: the profiling hooks, through `internals.injectProfilingHooks`. They supply commit and effect phase boundaries, per-component layout and passive effect times, update_enqueued with lane and call site (`markStateUpdateScheduled`, `markForceUpdateScheduled`), render yields and suspends. The hooks object leaves out the per-component render start and stop methods, so React skips those calls; render timing comes from the core.
@@ -60,7 +60,7 @@ Version facts the shim keys on. Checked in the react-dom npm builds on 2026-09-2
 | Per-fiber timers (ProfileMode) | if a hook exists at load | if a hook exists at load | if a hook exists at load | always in dev |
 | Mutation, Layout, Passive masks | 12854, 8772, 2064 | 13878, 8772, 10256 | 13878, 8772, 10256 | 13878, 8772, 10256 |
 
-`_debugHookTypes` exists in every dev build. Dev fibers are non-extensible, so per-fiber state lives in WeakMaps. Version strings can carry a build suffix (18.0.0 reports `18.0.0-fc46dba67-20220329`), so the shim keys on the leading major.minor only.
+Host elements get the Update flag in 18.x only when an attribute or event handler changed, and in 19.x whenever the props object changed. `_debugHookTypes` exists in every dev build. Dev fibers are non-extensible, so per-fiber state lives in WeakMaps. Version strings can carry a build suffix (18.0.0 reports `18.0.0-fc46dba67-20220329`), so the shim keys on the leading major.minor only.
 
 ## Overhead
 
@@ -122,9 +122,9 @@ Definitions.
 
 1. `component_id` is a stable hash of the owner path of display names, the keys along that path, and the source file and line where the version has them (not on 19.0.x), so it survives reloads. Frames in `_debugStack` point into the served bundle, so the capture program maps them back to original files through the page's source maps, off the page.
 2. For a render, `ts` is `actualStartTime`, `dur_us` is `actualDuration`, and `self_us` is `actualDuration` minus the children's `actualDuration`. Children are not subtracted when their subtree did not render. `self_us` includes reconciling the component's children, not only its function body.
-3. `committed` is true when `flags | subtreeFlags` has any bit in the version's mutation, layout or passive mask, read at `onCommitFiberRoot`.
+3. `committed` is true when the render mounted the component, or when something in its rendered subtree changed the DOM or ran an effect. DOM changes are placements, deletions, visibility toggles, text changes, and host props that differ by value (event handler identity and element children do not count). Effects are the layout, passive and class lifecycle work flagged for this commit. This replaces v1's `flags | subtreeFlags` test, which React 19's Update flag makes true for nearly every re-render.
 4. `reason_code`, `changed_hooks`, `changed_context` and `changed_keys` are defined under Why-data.
-5. `root_update_id` links update_enqueued, the renders and commit it produced, the effects that ran, and any update those effects enqueued. On 19.2+, update_enqueued exists only for the first update of each batch.
+5. `root_update_id` links update_enqueued, the renders and commit it produced, the effects that ran, and any update those effects enqueued. On 19.2+, update_enqueued exists only for the first update of each batch. On 18.0 to 19.1, `useSyncExternalStore` changes produce no update_enqueued row, because React calls no profiling hook for them; the commit walk still names the component and hook. yield and suspend rows come from 18.0 to 19.1 only.
 6. `lane` is the lane class name (Blocking, Transition, Suspense, Idle and so on). It comes from the commit lanes on 18.0 to 19.1 and from the Scheduler track name on 19.2+.
 7. `on_critical_path` is true when an event is reachable from the measure's trigger and precedes the measure's end. `signature` is a hash of trigger_event, producer_call_site and top_type.
 8. `passive_sync` is true when passive effects ran in the same task as the commit, detected with a MessageChannel probe on every version. `strict_mode` is true when the root runs under StrictMode, so dev render times include React's double render.
@@ -231,6 +231,12 @@ Acceptance. A capture left running for at least an hour in the cloud session aga
 5. Target is an in-repo fixture, runtime is CDP only and validated in the cloud session, builds are dev only, interactions come from Event Timing plus mark pairs, and the overhead bar is 5% at p50 and p95. The React DevTools clause left success criterion 1.
 6. Branded Chrome 136+ refuses CDP on the default profile, and 137+ ignores `--load-extension`, so launch mode always uses its own profile directory.
 7. The skill files moved out of this plan into `skills/react-log/`, their canonical home, so the two copies cannot drift.
+
+2026-09-28, Phase 1. Evidence from the same builds, the jsdom suite and headless Chromium.
+
+8. React 19 sets the Update flag on every host element whose props object changed, where 18 needs an attribute or handler change. `committed` is now computed from real DOM and effect changes, identically on 18 and 19.
+9. React 19.1+ dev builds run every fiber's render work through `_debugTask.run`, so the shim never wraps `run`: that would sit on the render hot path. On 19.2+ effect spans are matched to fibers by component name and tree order instead.
+10. Event Timing reports interactions of 16 ms or more only; faster ones get no measure.
 
 ## Kickoff prompt for Claude Code
 

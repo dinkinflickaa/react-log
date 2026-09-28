@@ -1,3 +1,5 @@
-// Page-side shim, built to dist/shim.js as an IIFE. Phase 1 implements it
-// (PLAN.md, "How the shim gets its data").
-export {};
+// Page-side shim, built to dist/shim.js as one IIFE and injected with
+// Page.addScriptToEvaluateOnNewDocument before any page script runs.
+import { install } from './install.ts';
+
+install(globalThis);

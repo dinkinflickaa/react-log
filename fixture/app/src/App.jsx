@@ -108,12 +108,21 @@ class Clock extends Component {
   }
 }
 
+// Busy-waits so effect times clear React 19.2's 0.05 ms logging threshold
+// and the 100 µs timer step.
+function spin(ms) {
+  const end = performance.now() + ms;
+  while (performance.now() < end);
+}
+
 function EffectPanel({ count }) {
   const ref = useRef(null);
   useLayoutEffect(() => {
+    spin(0.3);
     ref.current.dataset.layout = String(count);
   }, [count]);
   useEffect(() => {
+    spin(0.3);
     ref.current.dataset.passive = String(count);
   }, [count]);
   return (
