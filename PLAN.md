@@ -15,12 +15,12 @@ Not a goal at all: running next to the React DevTools extension. react-log is me
 3. Runtime: CDP only, so it works on any OS and any Chromium browser that exposes CDP. Everything is validated in headless Chromium in the cloud session. No step depends on a local machine.
 4. Target: a demo app in `fixture/` with planted performance bugs, one per fix class plus two that must bail. Phase 5 runs against it.
 5. Interactions: every trusted click and keypress that takes 16 ms or more becomes a measure, from Event Timing entries with an `interactionId` (16 ms is Event Timing's minimum threshold, so faster interactions leave no entry). Configured `performance.mark` pairs add named measures for async flows.
-6. Overhead: at most 5% added at p50 and at p95 per interaction, and no single shim task over 4 ms. See Overhead.
+6. Overhead: at most 5% added over an empty DevTools hook at p50 and at p95 per interaction, and no single shim task over 4 ms. See Overhead.
 
 ## Success criteria
 
 1. `react-log capture` runs until stopped against any React 18.x or 19.x dev app through CDP, segments stay queryable while it runs, and process memory stays flat however long it runs.
-2. The overhead benchmark passes: on small, medium and large fixture interactions, 30 runs each, shim on versus no hook at all, the shim adds at most 5% at p50 and at p95, and its longest task stays under 4 ms. It runs on 18.3.1 and 19.3.0 by default, and on any matrix version on request.
+2. The overhead benchmark passes: on small, medium and large fixture interactions, 30 runs each, shim on versus an empty DevTools hook, the shim adds at most 5% at p50 and at p95, and its longest task stays under 4 ms. The comparison with no hook at all is reported next to it. It runs on 18.3.1 and 19.3.0 by default, and on any matrix version on request.
 3. `react-log card <commit_id>` answers in under one second at five million rows.
 4. The skill, given a session, produces `findings.json` for the top five expensive commits, each with a fix or a bail, and every evidence query re-executes to the same numbers.
 5. One fix from the skill lands in a PR against the fixture, with before and after cost for the same commit signature, captured on the same interaction.
@@ -64,12 +64,12 @@ Host elements get the Update flag in 18.x only when an attribute or event handle
 
 ## Overhead
 
-The hook's presence alone turns on React's per-fiber timers in 18.x, 19.0 and 19.1. That cost counts, because the benchmark baseline has no hook at all.
+The hook's presence alone turns on React's per-fiber timers in 18.x, 19.0 and 19.1: on 18.3.1 an empty hook costs the lab's interactions 9 to 19% at p50. No hook-based tool can avoid that, React DevTools included, so the bar is measured against an empty hook, and the no-hook number is reported beside it (Decision log 17).
 1. Inside React's commit, the shim only reads numbers and flags and keeps references. Numbers go into preallocated typed-array ring buffers, and nothing allocates per fiber beyond one slot.
 2. Everything else runs in idle slices of at most 4 ms: diffs, component_id hashing (cached per fiber), stack formatting, serialization and flushing.
 3. Stacks are captured only for updates, at most `stacksPerBatch` per batch, with `Error.stackTraceLimit` lowered during capture and formatting deferred.
 4. The ring buffer never grows. On overflow the incoming event is dropped and counted as a dropped row.
-5. Benchmark method. The fixture server sends COOP and COEP, so timers tick at 5 µs. Input goes through CDP `Input.dispatchMouseEvent`, because Event Timing ignores untrusted events. Each run is timed in the page, from the click's `event.timeStamp` to a bubble-phase click listener on `document`, which runs after React's synchronous commit and passive effects. Event Timing rounds durations to 8 ms, too coarse for a 5% bar, and timing to the first frame after the commit adds up to 16.7 ms of frame-alignment noise, more than the whole small interaction. Shim work that can land between that listener and the next frame (PerformanceObserver callbacks, idle slices) counts toward the 4 ms task bar instead. Each load opens one tab per mode and the clicks alternate between the tabs, so drift hits both modes alike: 3 loads, 5 warm-up plus 10 measured runs per interaction per tab, a full GC and every shim tab flushed before each click. The shim times its own idle slices and observer callbacks and reports the longest.
+5. Benchmark method. The fixture server sends COOP and COEP, so timers tick at 5 µs. Input goes through CDP `Input.dispatchMouseEvent`, because Event Timing ignores untrusted events. Each run is timed in the page, from the click's `event.timeStamp` to a bubble-phase click listener on `document`, which runs after React's synchronous commit and passive effects. Event Timing rounds durations to 8 ms, too coarse for a 5% bar, and timing to the first frame after the commit adds up to 16.7 ms of frame-alignment noise, more than the whole small interaction. Shim work that can land between that listener and the next frame (PerformanceObserver callbacks, idle slices) counts toward the 4 ms task bar instead. Each load opens one tab per mode (shim, empty hook, no hook) and the clicks alternate between the tabs, so drift hits every mode alike: 3 loads, 5 warm-up plus 10 measured runs per interaction per tab, a full GC and every shim tab flushed before each click. The shim times its own idle slices and observer callbacks and reports the longest.
 6. Click spacing. Every click comes at least 1.1 s after the same tab's previous one. React 19 dev builds capture an owner stack (an `Error` and a `console.createTask`) for only the first 10,000 JSX elements in each window of at least one second, reset when a render starts (`prepareFreshStack`). Clicks closer together skip those stacks once the window's budget is spent, so the large interaction measured anywhere from about 45 to 150 ms in both modes, depending only on spacing. With the gap, every measured render pays for its stacks, as an interaction a person makes does.
 
 ## Timer precision
@@ -249,6 +249,8 @@ Acceptance. A capture left running for at least an hour in the cloud session aga
 14. React 19 dev captures owner stacks for only the first 10,000 elements per window of at least one second. The benchmark spaces clicks 1.1 s apart, otherwise it measures click spacing rather than overhead (Overhead, item 6).
 15. React 19.2+ logs a `performance.measure` for every re-rendered component whose props changed, and clears it at once. Observing measures handed the shim 3,000 entries per click on the large interaction and a 7.65 ms observer callback. The shim no longer observes measures; its `performance.measure` wrapper records the app's own (React's all carry `detail.devtools`).
 16. On stop, capture asks every page to flush its ring before closing the browser, so the last quarter second of rows is not lost.
+17. The overhead bar's baseline is an empty DevTools hook, not no hook at all (owner's call). React 18 times every fiber whenever a hook exists (`react-dom.development.js`, "Always collect profile timings when DevTools are present"), which cost 9 to 19% at p50 on 18.3.1 with nothing recorded, so a 5% bar against no hook could never pass on 18.x, 19.0 or 19.1. On 19.3 an empty hook costs about 3% on the small interaction. The benchmark still reports the no-hook comparison.
+18. A tab opened with a URL has created its first document by the time auto-attach pauses it, so a new-document script alone misses that document. Capture passes `runImmediately` for paused targets: the shim runs in that document before any page script.
 
 ## Kickoff prompt for Claude Code
 
