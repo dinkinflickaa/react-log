@@ -4,13 +4,19 @@
 // between the tabs click by click, and time each run in the page from the
 // input event's timestamp to the end of React's commit.
 //
-//   node bench/overhead.ts [--versions 18.3.1,19.3.0] [--loads 3] [--runs 10] [--warmup 5] [--json out.json]
+//   node bench/overhead.ts [--versions 18.3.1,19.3.0] [--loads 6] [--runs 10] [--warmup 5] [--json out.json]
 //
 // Passes when the shim adds at most 5% over the empty hook at p50 and at p95
 // for every interaction, and its longest task stays under 4 ms. React itself
 // reacts to any DevTools hook (on 18.x, 19.0 and 19.1 it times every fiber),
 // which no hook-based tool can avoid, so the no-hook tab is reported next to
 // it but not gated.
+//
+// Each interaction first runs rapid in-page clicks until V8 has optimized
+// React's hot paths: with only a few warm-up clicks, whether React's per-fiber
+// timer calls were optimized yet varied from tab to tab, which moved the large
+// interaction by 2 to 5 ms between identical tabs. The rounds let the shim
+// drain its ring in between, so warm-up never overflows it.
 //
 // Every click comes at least 1.1 s after the same tab's previous one. React
 // 19 dev captures an owner stack (an Error and a console task) for the first
@@ -29,11 +35,13 @@ import { launchChrome } from '../packages/capture/src/chrome.ts';
 import { startFixtureServer } from '../fixture/serve.ts';
 import { bundleShim } from '../packages/shim/build.ts';
 
+// jitClicks: rapid in-page clicks, in rounds, before the trusted warm-up.
 const INTERACTIONS = [
-  { name: 'small', button: '#bench-small' },
-  { name: 'medium', button: '#bench-medium' },
-  { name: 'large', button: '#bench-large' },
+  { name: 'small', button: '#bench-small', jitClicks: 40 },
+  { name: 'medium', button: '#bench-medium', jitClicks: 20 },
+  { name: 'large', button: '#bench-large', jitClicks: 8 },
 ] as const;
+const JIT_ROUNDS = 5;
 const BAR_PCT = 5;
 const BAR_TASK_MS = 4;
 const GAP_MS = 1100;
@@ -49,7 +57,10 @@ type Mode = 'off' | 'on' | 'hook';
 const { values } = parseArgs({
   options: {
     versions: { type: 'string', default: '18.3.1,19.3.0' },
-    loads: { type: 'string', default: '3' },
+    // Most of the noise is between tab instances (two identical tabs differ
+    // by about 6% at p50 on the small interaction), so more loads, not more
+    // runs per load, is what tightens the estimate.
+    loads: { type: 'string', default: '6' },
     runs: { type: 'string', default: '10' },
     warmup: { type: 'string', default: '5' },
     json: { type: 'string' },
@@ -104,8 +115,11 @@ async function openTab(cdp: CdpClient, url: string, mode: Mode, shim: string): P
     if (e.sessionId === sessionId && e.method === 'Runtime.bindingCalled') tab.sinkBytes += e.params.payload.length;
   });
   await cdp.send('Page.enable', {}, sessionId);
-  await cdp.send('Runtime.enable', {}, sessionId);
   if (mode === 'on') {
+    // Exactly what capture does to a page. The other tabs leave Runtime off,
+    // like a page with no react-log: Runtime.evaluate needs no enable.
+    await cdp.send('Runtime.enable', {}, sessionId);
+    await cdp.send('Runtime.setMaxCallStackSizeToCapture', { size: 0 }, sessionId);
     await cdp.send('Runtime.addBinding', { name: '__reactLogSink' }, sessionId);
     await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: shim }, sessionId);
   } else if (mode === 'hook') {
@@ -143,6 +157,9 @@ async function click(cdp: CdpClient, tabs: Tab[], tab: Tab, selector: string): P
     `new Promise((r) => { const f = () => (window.__lab.last && window.__lab.last.end !== ${JSON.stringify(before)} ? r(window.__lab.last) : setTimeout(f, 2)); f(); })`,
   );
   if (`#${last.id}` !== selector) throw new Error(`clicked ${last.id}, expected ${selector}`);
+  // Drain while still in front: in a background tab the shim's idle
+  // callbacks only run on their timeout.
+  await quiet([tab]);
   return last.ms;
 }
 
@@ -170,6 +187,17 @@ try {
       const tabs: Tab[] = [];
       for (const mode of order) tabs.push(await openTab(cdp, url, mode, shim));
       for (const it of INTERACTIONS) {
+        // In front, so the shim drains at full speed: a background tab runs
+        // idle callbacks only on their timeout.
+        for (const t of tabs) {
+          await cdp.send('Page.bringToFront', {}, t.sessionId);
+          for (let round = 0; round < JIT_ROUNDS; round++) {
+            await t.eval(
+              `(async () => { const b = document.querySelector(${JSON.stringify(it.button)}); for (let i = 0; i < ${it.jitClicks}; i++) { b.click(); await null; } return true; })()`,
+            );
+            await quiet([t]);
+          }
+        }
         for (let i = 0; i < warmup; i++) for (const t of tabs) await click(cdp, tabs, t, it.button);
         for (const t of tabs) {
           if (t.mode === 'on') await t.eval('Object.assign(window.__reactLog.stats, { maxTaskMs: 0, maxIdleMs: 0, maxObserverMs: 0, maxWalkMs: 0 })');

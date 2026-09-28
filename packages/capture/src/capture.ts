@@ -167,6 +167,11 @@ export async function capture(opts: CaptureOptions): Promise<CaptureResult> {
     // new-document scripts only with Page enabled.
     await cdp.send('Page.enable', {}, sid);
     await cdp.send('Runtime.enable', {}, sid);
+    // With Runtime enabled, V8 records up to 200 frames on every new Error in
+    // case it goes uncaught, whatever Error.stackTraceLimit says. React 19 dev
+    // creates an Error per JSX element, so that made the page's own work
+    // slower under capture. Capture needs no exception stacks.
+    await cdp.send('Runtime.setMaxCallStackSizeToCapture', { size: 0 }, sid).catch(() => {});
     await cdp.send('Runtime.addBinding', { name: '__reactLogSink' }, sid);
     // A tab opened with a URL (window.open, target=_blank) has created its
     // first document by the time it pauses, so a new-document script alone

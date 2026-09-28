@@ -38,7 +38,7 @@ Each browser tab is a session under `segments/<session_id>/`, with `session.json
 ## Benchmarks
 
 ```sh
-node bench/overhead.ts             # shim vs an empty DevTools hook (gated) and vs no hook, React 18.3.1 and 19.3.0 (about 25 min)
+node bench/overhead.ts             # shim vs an empty DevTools hook (gated) and vs no hook, React 18.3.1 and 19.3.0 (about 45 min)
 node bench/soak.ts --minutes 60    # capture under scripted load: rows grow, memory flat, nothing dropped
 ```
 

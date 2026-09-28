@@ -1,12 +1,21 @@
 import { type Frame, parseFrames } from './ids.ts';
 
-// Capturing an Error records structured frames; V8 formats the text lazily,
-// on first read of .stack, which happens in idle time.
-export function captureStack(): Error {
-  const limit = Error.stackTraceLimit;
-  Error.stackTraceLimit = 30;
-  const e = new Error('react-log update');
+// Capturing a stack records structured frames; V8 formats the text lazily,
+// on first read of .stack, which happens in idle time. The capture itself
+// runs inside the update and costs more with every frame kept (about 50 µs
+// for 30 frames of a React 18 click), so the frames from `skip` inward (the
+// shim's own) are left out and only `limit` frames are kept.
+export function captureStack(limit: number, skip: Function): Error {
+  const saved = Error.stackTraceLimit;
   Error.stackTraceLimit = limit;
+  let e: Error;
+  if (typeof Error.captureStackTrace === 'function') {
+    e = { name: 'Error', message: 'react-log update' } as Error;
+    Error.captureStackTrace(e, skip);
+  } else {
+    e = new Error('react-log update');
+  }
+  Error.stackTraceLimit = saved;
   return e;
 }
 

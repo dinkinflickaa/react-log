@@ -43,7 +43,10 @@ function runIdle(s: Shim, deadline: IdleDeadline | null): void {
   s.idleScheduled = false;
   const t0 = now();
   let budget = s.config.sliceMs;
-  if (deadline !== null) budget = Math.min(budget, Math.max(1, deadline.timeRemaining()));
+  // Fired on its timeout the callback has no idle time left, which is how a
+  // busy or background page runs it (background tabs about once a second):
+  // take the full slice then, or a hidden tab could not keep up.
+  if (deadline !== null && !deadline.didTimeout) budget = Math.min(budget, Math.max(1, deadline.timeRemaining()));
   try {
     // Serialize for 30% of the budget. The rest is headroom for the sink call
     // (about 0.35 ms for a full payload) and for a GC or a preemption that

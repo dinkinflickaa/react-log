@@ -19,8 +19,14 @@ export function currentEvent(g: any): string | null {
   return e != null && e.isTrusted === true && typeof e.type === 'string' ? e.type : null;
 }
 
-function stackForUpdate(s: Shim): Error | null {
-  return s.updatesSinceCommit++ < s.config.stacksPerBatch ? captureStack() : null;
+// Frames to keep past the shim's: React's update path (up to five frames),
+// the call site, and on 19.2+ enough of React's commit or render frames to
+// tell the phase, which 18.0 to 19.1 get from the profiling hooks instead.
+const FRAMES_WITH_HOOKS = 10;
+const FRAMES_19_2 = 16;
+
+function stackForUpdate(s: Shim, limit: number, skip: Function): Error | null {
+  return s.updatesSinceCommit++ < s.config.stacksPerBatch ? captureStack(limit, skip) : null;
 }
 
 // React 18.0 to 19.1: the scheduling-profiler hooks, installed through
@@ -67,7 +73,7 @@ export function profilingHooks(s: Shim, r: Renderer): Record<string, (...args: a
     ring.n0[i] = laneClassOf(lane, r.laneLabels);
     ring.r0[i] = fiber;
     ring.r1[i] = method;
-    ring.r2[i] = stackForUpdate(s);
+    ring.r2[i] = stackForUpdate(s, FRAMES_WITH_HOOKS, update);
     ring.r3[i] = s.phase === 'idle' ? null : s.phase === 'commit' ? 'layout' : s.phase;
     ring.r4[i] = event;
   };
@@ -293,7 +299,7 @@ function onUpdateTask(s: Shim, method: string): void {
     t: now(),
     transition: shared != null && shared.T != null,
     event,
-    stack: stackForUpdate(s),
+    stack: stackForUpdate(s, FRAMES_19_2, onUpdateTask),
   });
 }
 
