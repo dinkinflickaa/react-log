@@ -255,6 +255,7 @@ Acceptance. A capture left running for at least an hour in the cloud session aga
 20. Update stacks skip the shim's own frames (`Error.captureStackTrace` with the shim function as the cut) and keep 10 frames on 18.0 to 19.1, where the profiling hooks give the phase, and 16 on 19.2+, where the phase comes from the stack. Capturing 30 frames of a React 18 click took 50 µs inside the update; 10 take about 25 µs.
 21. An idle callback that fires on its timeout has no idle time left, which is how Chromium runs them in a busy or background tab (about once a second). The shim took a 1 ms slice then and a hidden tab drained about 7 KB a second; it now takes the full 4 ms slice.
 22. Benchmark noise, measured: two identical tabs differ by 4 to 6% at p50 on the small interaction, and the within-tab A/B (the shim's hooks switched off and on click by click in one tab) puts the shim's own in-click cost at 1 to 2.5% on 19.3 small and under the noise on 18.3.1 medium. The gated three-tab comparison still shows occasional shim tabs that stay 10 to 40% slower for a whole load; tracing found no GC inside those clicks, and the effect did not reproduce under tracing. Open.
+23. Capture's memory over a one-hour soak (1.94 million rows, 3,383 clicks, 3 reloads) rose 2.3% (111.9 to 114.5 MB RSS). A 20-minute run with a forced GC before every sample kept the live JS heap at 18.9 to 19.2 MB and RSS flat (113.4 to 113.5 MB), so the rise is garbage V8 had not collected yet, not a leak.
 
 ## Kickoff prompt for Claude Code
 
