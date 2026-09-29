@@ -6,13 +6,13 @@
 // hold more than any fixed size (a first render of 100,000 components), so
 // the ring grows instead of dropping. Records are appended at the end; at the
 // end of the arrays the ring either moves the unread records to the front or
-// doubles the arrays, up to maxCap. Growing keeps every index; moving shifts
-// them, and fixes up the index arrays in `holders` (the walk's slots, effect
-// spans waiting for their commit), so an index held across a write stays
-// valid. Only past maxCap is an incoming record dropped and counted; the
-// last slots are kept for commit rows, which carry each commit's count of
-// dropped records, so a loss is never silent. Once empty, the ring goes back
-// to its first size.
+// doubles the arrays. Growing keeps every index; moving shifts them, and
+// fixes up the index arrays in `holders` (the walk's slots, effect spans
+// waiting for their commit, the last commit row), so an index held across a
+// write stays valid. The ring itself has no limit: the pipeline keeps it near
+// a high watermark by taking records synchronously (spill), and a record is
+// dropped, and counted, only when the browser refuses the memory. Once
+// empty, the ring goes back to its first size.
 
 export const K_RENDER = 1;
 export const K_COMMIT = 2;
@@ -30,9 +30,6 @@ type Indices = { length: number; [i: number]: number };
 export class Ring {
   cap = 0;
   readonly minCap: number;
-  readonly maxCap: number;
-  // Slots at the top only commit rows may take.
-  readonly reserve: number;
   kind = new Uint8Array(0);
   commit = new Int32Array(0);
   t0 = new Float64Array(0);
@@ -56,16 +53,14 @@ export class Ring {
   // Arrays of indices held across writes; -1 is none.
   readonly holders: Indices[] = [];
 
-  constructor(cap: number, maxCap = cap) {
+  constructor(cap: number) {
     this.minCap = Math.max(1, cap);
-    this.maxCap = Math.max(this.minCap, maxCap);
-    this.reserve = Math.min(1024, this.maxCap >> 3);
     this.resize(this.minCap);
   }
 
-  // Returns the slot to fill, or -1 when the ring is at maxCap and full.
+  // Returns the slot to fill, or -1 when the browser refused more memory.
   alloc(kind: number): number {
-    if ((kind !== K_COMMIT && this.count >= this.maxCap - this.reserve) || (this.head === this.cap && !this.makeRoom())) {
+    if (this.head === this.cap && !this.makeRoom()) {
       this.dropped++;
       return -1;
     }
@@ -98,11 +93,16 @@ export class Ring {
   }
 
   private makeRoom(): boolean {
-    if (this.tail > 0 && this.count <= this.cap >> 1) this.moveTo(this.cap);
-    else if (this.cap < this.maxCap) this.resize(Math.min(this.maxCap, this.cap * 2));
-    else if (this.tail > 0) this.moveTo(this.cap);
-    else return false;
-    return true;
+    try {
+      if (this.tail > 0 && this.count <= this.cap >> 1) this.moveTo(this.cap);
+      else this.resize(this.cap * 2);
+      return true;
+    } catch {
+      // Out of memory for bigger arrays: room at the front, if any.
+      if (this.tail === 0) return false;
+      this.moveTo(this.cap);
+      return true;
+    }
   }
 
   // Arrays of `cap` slots, every record at the same index.
@@ -125,28 +125,31 @@ export class Ring {
         }
       }
     } else {
-      const typed = <T extends Uint8Array | Int32Array | Float64Array>(old: T, next: T): T => {
-        next.set(old.subarray(from, to), at);
-        return next;
-      };
-      const refs = (old: unknown[]): unknown[] => {
-        const next = new Array<unknown>(cap).fill(null);
+      // Every new array first, so running out of memory leaves the ring as it was.
+      const kind = new Uint8Array(cap);
+      const commit = new Int32Array(cap);
+      const t0 = new Float64Array(cap);
+      const t1 = new Float64Array(cap);
+      const t2 = new Float64Array(cap);
+      const n0 = new Int32Array(cap);
+      const refs = [this.r0, this.r1, this.r2, this.r3, this.r4, this.r5, this.r6].map(() => new Array<unknown>(cap).fill(null));
+      kind.set(this.kind.subarray(from, to), at);
+      commit.set(this.commit.subarray(from, to), at);
+      t0.set(this.t0.subarray(from, to), at);
+      t1.set(this.t1.subarray(from, to), at);
+      t2.set(this.t2.subarray(from, to), at);
+      n0.set(this.n0.subarray(from, to), at);
+      [this.r0, this.r1, this.r2, this.r3, this.r4, this.r5, this.r6].forEach((old, k) => {
+        const next = refs[k]!;
         for (let i = from; i < to; i++) next[i - from + at] = old[i];
-        return next;
-      };
-      this.kind = typed(this.kind, new Uint8Array(cap));
-      this.commit = typed(this.commit, new Int32Array(cap));
-      this.t0 = typed(this.t0, new Float64Array(cap));
-      this.t1 = typed(this.t1, new Float64Array(cap));
-      this.t2 = typed(this.t2, new Float64Array(cap));
-      this.n0 = typed(this.n0, new Int32Array(cap));
-      this.r0 = refs(this.r0);
-      this.r1 = refs(this.r1);
-      this.r2 = refs(this.r2);
-      this.r3 = refs(this.r3);
-      this.r4 = refs(this.r4);
-      this.r5 = refs(this.r5);
-      this.r6 = refs(this.r6);
+      });
+      this.kind = kind;
+      this.commit = commit;
+      this.t0 = t0;
+      this.t1 = t1;
+      this.t2 = t2;
+      this.n0 = n0;
+      [this.r0, this.r1, this.r2, this.r3, this.r4, this.r5, this.r6] = refs as [unknown[], unknown[], unknown[], unknown[], unknown[], unknown[], unknown[]];
       this.cap = cap;
       if (cap > this.peakCap) this.peakCap = cap;
     }

@@ -19,7 +19,7 @@ import { classifyKeys, whyRendered } from './why.ts';
 
 // Wire format, one JSON message per sink call:
 //   {t:"hello"|"renderer"|"refused"|"error", ...}
-//   {t:"batch", seq, dropped, peak, defs, rows}
+//   {t:"batch", seq, dropped, peak, slices, defs, rows}
 // defs: [component_id, display_name, source_file, source_line, source_column, owner_path, memo]
 // rows: [kind, ts, dur_us, self_us, lane, component_id, commit, reason_code,
 //        changed_hooks, changed_context, changed_keys, committed, call_site, extra]
@@ -30,31 +30,54 @@ export function post(s: Shim, message: object): void {
   scheduleIdle(s);
 }
 
-// Rows waiting beyond which the page's idle time is not enough: a busy page
-// (a load, an animation) runs idle callbacks only on their timeout.
+// How the page hands its records to capture, from lightest to heaviest:
+//
+// 1. Idle callbacks, at most a 4 ms slice, or up to a frame's worth of an
+//    idle period once more than BACKLOG rows wait (Chrome runs one idle
+//    callback per period of up to 50 ms), asked for every 100 ms then so a
+//    busy page still gets one.
+// 2. Past TASK_BACKLOG rows, tasks of its own (8 ms slices, posted to a
+//    MessageChannel) between the page's tasks, until the backlog is back
+//    under it: under sustained load capture takes the main-thread share it
+//    needs instead of falling behind.
+// 3. Past ringHigh rows, a spill after the commit's walk or its passive
+//    effects: finished records go out synchronously, down to 90% of ringHigh,
+//    so the page's memory stays bounded and nothing is dropped. The page waits
+//    for it; never inside React's render, commit or effects.
+//
+// Every slice that sent rows, and every walk, is recorded ([start, end,
+// kind] in s.slices, sent with the next batch): measures count it as
+// capture's time, not the app's.
 const BACKLOG = 2000;
+const TASK_BACKLOG = 20_000;
+const TASK_SLICE_MS = 8;
+const BACKLOG_SLICE_MS = 16;
+export const SLICE_IDLE = 0;
+export const SLICE_TASK = 1;
+export const SLICE_SPILL = 2;
+export const SLICE_WALK = 3;
+
+const sinkReady = (s: Shim) => typeof s.g.__reactLogSink === 'function';
+
+// Scrolls and drags too, not only clicks and keys.
+function inputPending(s: Shim): boolean {
+  const scheduling = s.g.navigator?.scheduling;
+  return typeof scheduling?.isInputPending === 'function' && scheduling.isInputPending({ includeContinuous: true }) === true;
+}
 
 export function scheduleIdle(s: Shim): void {
+  if (s.ring.count > TASK_BACKLOG) scheduleTask(s);
   if (s.idleScheduled) return;
   s.idleScheduled = true;
   const ric = s.g.requestIdleCallback;
-  // With a backlog, a slice at least every 100 ms: at most 4% of a busy
-  // main thread.
   const timeout = s.ring.count > BACKLOG ? 100 : 1000;
   if (typeof ric === 'function') ric.call(s.g, (d: IdleDeadline) => runIdle(s, d), { timeout });
   else setTimeout(() => runIdle(s, null), 1);
 }
 
-// With a backlog on an idle page, a slice takes up to a frame's worth of the
-// idle period: Chrome runs one idle callback per period of up to 50 ms.
-const BACKLOG_SLICE_MS = 16;
-
 function runIdle(s: Shim, deadline: IdleDeadline | null): void {
   s.idleScheduled = false;
   const t0 = now();
-  const scheduling = s.g.navigator?.scheduling;
-  // Scrolls and drags too, not only clicks and keys.
-  const inputPending = typeof scheduling?.isInputPending === 'function' ? () => scheduling.isInputPending({ includeContinuous: true }) === true : () => false;
   let until: number;
   if (deadline !== null && !deadline.didTimeout && s.ring.count > BACKLOG) {
     // Until 2 ms before the idle period ends, and no longer than a frame;
@@ -71,23 +94,89 @@ function runIdle(s: Shim, deadline: IdleDeadline | null): void {
     // preemption that lands in the slice.
     until = t0 + budget * 0.6;
   }
+  slice(s, t0, until, SLICE_IDLE);
+  const dt = now() - t0;
+  if (dt > s.stats.maxIdleMs) s.stats.maxIdleMs = dt;
+  if (s.ring.count > 0 || s.outbox.length > 0) scheduleIdle(s);
+}
+
+function scheduleTask(s: Shim): void {
+  if (s.taskScheduled) return;
+  const MC = s.g.MessageChannel;
+  if (typeof MC !== 'function') return;
+  if (s.channel === null) {
+    s.channel = new MC() as MessageChannel;
+    s.channel.port1.onmessage = () => runTask(s);
+    (s.channel.port1 as unknown as { unref?: () => void }).unref?.();
+  }
+  s.taskScheduled = true;
+  s.channel.port2.postMessage(0);
+}
+
+function runTask(s: Shim): void {
+  s.taskScheduled = false;
+  const t0 = now();
+  slice(s, t0, t0 + TASK_SLICE_MS, SLICE_TASK);
+  if (s.ring.count > TASK_BACKLOG) scheduleTask(s);
+  else if (s.ring.count > 0 || s.outbox.length > 0) scheduleIdle(s);
+}
+
+// Payloads until `until`, input, or an empty ring; recorded if it sent rows.
+function slice(s: Shim, t0: number, until: number, kind: number): void {
+  let sent = 0;
   try {
-    do drain(s, until);
-    while (s.ring.count > 0 && now() < until && typeof s.g.__reactLogSink === 'function' && !inputPending());
+    do sent += drain(s, until);
+    while (s.ring.count > 0 && now() < until && sinkReady(s) && !inputPending(s));
     s.ring.settle();
   } catch (e) {
     report(s, e);
   }
-  const dt = now() - t0;
-  if (dt > s.stats.maxIdleMs) s.stats.maxIdleMs = dt;
-  if (dt > s.stats.maxTaskMs) s.stats.maxTaskMs = dt;
-  if (s.ring.count > 0 || s.outbox.length > 0) scheduleIdle(s);
+  const t1 = now();
+  if (sent > 0) s.slices.push(r3(t0)!, r3(t1)!, kind);
+  if (t1 - t0 > s.stats.maxTaskMs) s.stats.maxTaskMs = t1 - t0;
+}
+
+// After a commit's walk, and after its passive effects: the points where the
+// page may wait for capture (see above).
+export function afterCommit(s: Shim): void {
+  const ring = s.ring;
+  if (ring.count > s.config.ringHigh) spill(s);
+  if (ring.count > TASK_BACKLOG) scheduleTask(s);
+}
+
+// Finished records only, those at or before the last commit row: after it
+// may be the open commit's, whose effect spans pair with fibers its walk has
+// not collected yet.
+function spill(s: Shim): void {
+  if (s.spilling || !sinkReady(s)) return;
+  s.spilling = true;
+  const t0 = now();
+  let sent = 0;
+  try {
+    const ring = s.ring;
+    const floor = Math.floor(s.config.ringHigh * 0.9);
+    while (ring.count > floor && ring.tail <= s.lastCommitSlot[0]!) {
+      const n = drain(s, Infinity, floor, true);
+      if (n === 0) break;
+      sent += n;
+    }
+  } catch (e) {
+    report(s, e);
+  } finally {
+    s.spilling = false;
+  }
+  const t1 = now();
+  if (sent > 0) {
+    s.slices.push(r3(t0)!, r3(t1)!, SLICE_SPILL);
+    s.stats.spills++;
+    s.stats.spillMs += t1 - t0;
+  }
 }
 
 // Everything, now, ignoring the slice budget: tests and pagehide. Each
 // drain sends one payload of about 24 KB, so loop until the ring is empty.
 export function flushNow(s: Shim): void {
-  if (typeof s.g.__reactLogSink !== 'function') return;
+  if (!sinkReady(s)) return;
   do {
     try {
       drain(s, Infinity);
@@ -99,16 +188,19 @@ export function flushNow(s: Shim): void {
   s.ring.settle();
 }
 
-function drain(s: Shim, until: number): void {
+// One payload: rows from the oldest until `until`, about 24 KB, `floor` rows
+// left, or (committed) the last commit row. Returns the rows sent.
+function drain(s: Shim, until: number, floor = 0, committed = false): number {
   const sink = s.g.__reactLogSink;
-  if (typeof sink !== 'function') return;
+  if (typeof sink !== 'function') return 0;
   while (s.outbox.length > 0) sink(s.outbox.shift());
   expireTasks(s);
   const ring = s.ring;
   const rows: string[] = [];
   let bytes = 0;
-  while (ring.count > 0) {
+  while (ring.count > floor) {
     const i = ring.peek();
+    if (committed && i > s.lastCommitSlot[0]!) break;
     // Formatting a stack can take a millisecond or more, so a slice formats
     // at most one, as its first row.
     if (rows.length > 0 && ring.kind[i] === K_UPDATE && ring.r2[i] != null) break;
@@ -129,16 +221,17 @@ function drain(s: Shim, until: number): void {
     if (now() > until || bytes + s.defBytes > 24_000) break;
   }
   const dropped = ring.dropped - s.lastDropped;
-  if (rows.length === 0 && s.defs.length === 0 && dropped === 0) {
+  if (rows.length === 0 && s.defs.length === 0 && dropped === 0 && s.slices.length === 0) {
     while (s.outbox.length > 0) sink(s.outbox.shift());
-    return;
+    return 0;
   }
   // peak: the most records the page held at once, a measure of how far
-  // capture fell behind.
-  const message = `{"t":"batch","seq":${s.seq++},"dropped":${dropped},"peak":${ring.peak},"defs":${JSON.stringify(s.defs)},"rows":[${rows.join(',')}]}`;
+  // capture fell behind. slices: the shim's own work since the last batch.
+  const message = `{"t":"batch","seq":${s.seq++},"dropped":${dropped},"peak":${ring.peak},"slices":[${s.slices.join(',')}],"defs":${JSON.stringify(s.defs)},"rows":[${rows.join(',')}]}`;
   s.lastDropped = ring.dropped;
   s.defs = [];
   s.defBytes = 0;
+  s.slices = [];
   s.stats.batches++;
   s.stats.rows += rows.length;
   if (message.length > s.stats.maxBatchBytes) s.stats.maxBatchBytes = message.length;
@@ -147,6 +240,7 @@ function drain(s: Shim, until: number): void {
   const sinkMs = now() - t;
   if (sinkMs > s.stats.maxSinkMs) s.stats.maxSinkMs = sinkMs;
   while (s.outbox.length > 0) sink(s.outbox.shift());
+  return rows.length;
 }
 
 // 19.2+: a createTask capture that no "Update" measure claimed within two
@@ -160,7 +254,7 @@ function expireTasks(s: Shim): void {
   }
 }
 
-const r3 = (x: number): number | null => (Number.isFinite(x) ? Math.round(x * 1000) / 1000 : null);
+export const r3 = (x: number): number | null => (Number.isFinite(x) ? Math.round(x * 1000) / 1000 : null);
 const us = (x: number): number | null => (Number.isFinite(x) ? Math.round(x * 1000) : null);
 const laneName = (i: number): string | null => (i > 0 ? LANE_CLASSES[i]! : null);
 

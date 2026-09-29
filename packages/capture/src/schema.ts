@@ -87,6 +87,7 @@ export const SCHEMAS: Record<Family, [name: string, type: string][]> = {
     ['on_path_ms', 'DOUBLE'],
     ['interference_ms', 'DOUBLE'],
     ['waiting_ms', 'DOUBLE'],
+    ['capture_ms', 'DOUBLE'],
   ],
 };
 

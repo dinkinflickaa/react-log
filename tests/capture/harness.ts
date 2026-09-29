@@ -125,10 +125,11 @@ export async function withCapture(
   root: string,
   name: string,
   url: string,
-  opts: { isolate?: boolean },
+  opts: { isolate?: boolean; record?: Partial<CaptureConfig['record']> },
   drive: (cdp: CdpClient, launched: Tab) => Promise<void>,
 ): Promise<CaptureRun> {
-  const config = configFor(root, name);
+  const base = configFor(root, name);
+  const config = { ...base, record: { ...base.record, ...opts.record } };
   const abort = new AbortController();
   const logs: string[] = [];
   const running = capture({ config, launch: url, headless: true, isolate: opts.isolate, duckdb, signal: abort.signal, log: (l) => logs.push(l) });

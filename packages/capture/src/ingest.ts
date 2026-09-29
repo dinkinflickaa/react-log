@@ -79,6 +79,9 @@ function gitState(): Promise<GitState> {
   return gitAsked;
 }
 
+// What the shim was doing in a capture slice (pipeline.ts SLICE_*).
+const SLICE_KINDS = ['idle', 'task', 'spill', 'walk'];
+
 // One capture session: one browser target. Turns shim messages into rows,
 // links and rolls them up per page load (rollup.ts), and hands them to the
 // segment writer. Each execution context that says hello is a page load.
@@ -186,6 +189,17 @@ export class Session {
         for (const d of msg.defs) this.def(d);
         for (const r of msg.rows) this.event(page, r);
         if (typeof msg.peak === 'number' && msg.peak > this.info.buffer_peak) this.info.buffer_peak = msg.peak;
+        // The shim's own main-thread work: measures count it as capture's.
+        const slices: unknown[] = Array.isArray(msg.slices) ? msg.slices : [];
+        for (let k = 0; k + 2 < slices.length; k += 3) {
+          const [a, b, how] = slices.slice(k, k + 3) as number[];
+          if (typeof a !== 'number' || typeof b !== 'number' || !(b >= a)) continue;
+          this.enqueue(
+            page,
+            this.row(page, { kind: 'capture', ts: Math.round((page.timeOrigin + a) * 1000), dur_us: Math.round((b - a) * 1000), extra: { how: SLICE_KINDS[how!] ?? 'other' } }),
+            null,
+          );
+        }
         if (msg.dropped > 0) {
           this.info.dropped += msg.dropped;
           this.enqueue(page, this.row(page, { kind: 'dropped', ts: Math.round(Date.now() * 1000), extra: { count: msg.dropped } }), null);

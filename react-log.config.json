@@ -4,6 +4,6 @@
   "launch": { "chromePath": null, "userDataDir": "~/.react-log/profile", "isolate": false },
   "interactions": { "eventTiming": true },
   "measures": [{ "name": "route_switch", "start": "route_switch:start", "end": "route_switch:end" }],
-  "record": { "compositeOnly": true, "values": false, "stacksOn": ["update"], "stacksPerBatch": 8, "watch": [] },
+  "record": { "compositeOnly": true, "values": false, "stacksOn": ["update"], "stacksPerBatch": 8, "watch": [], "ringHigh": 250000 },
   "segments": { "dir": "./segments", "rotateSeconds": 10, "rotateRows": 200000 }
 }

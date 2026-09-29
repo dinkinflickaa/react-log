@@ -6,9 +6,11 @@ import { Ring } from './ring.ts';
 export type Fiber = any;
 
 export interface Config {
-  // Records the ring starts with, and the most it grows to before it drops.
+  // Records the ring starts with, and its high watermark: past it, capture
+  // takes records synchronously at commit boundaries instead of letting the
+  // page's memory grow (each held record keeps about 250 bytes alive).
   ringSize: number;
-  ringMax: number;
+  ringHigh: number;
   flushIntervalMs: number;
   sliceMs: number;
   stacksPerBatch: number;
@@ -20,7 +22,7 @@ export interface Config {
 
 export const DEFAULT_CONFIG: Config = {
   ringSize: 50_000,
-  ringMax: 1_000_000,
+  ringHigh: 250_000,
   flushIntervalMs: 250,
   sliceMs: 4,
   stacksPerBatch: 8,
@@ -107,6 +109,9 @@ export interface Stats {
   maxBatchBytes: number;
   batches: number;
   rows: number;
+  // Synchronous takes past ringHigh, and the time the page waited for them.
+  spills: number;
+  spillMs: number;
 }
 
 export interface Shim {
@@ -146,6 +151,14 @@ export interface Shim {
   watch: Set<string>;
   errors: Set<string>;
   idleScheduled: boolean;
+  taskScheduled: boolean;
+  channel: MessageChannel | null;
+  spilling: boolean;
+  // The slot of the last commit row: records up to it are finished.
+  lastCommitSlot: Int32Array;
+  // The shim's own main-thread work, [start, end, kind] flat, sent with the
+  // next batch so measures can tell it from the app's.
+  slices: number[];
   seq: number;
   lastDropped: number;
   // Walk scratch space.
@@ -157,8 +170,8 @@ export function createShim(g: any, config: Config): Shim {
   const s: Shim = {
     g,
     config,
-    ring: new Ring(config.ringSize, config.ringMax),
-    stats: { commits: 0, walkMs: 0, maxWalkMs: 0, maxTaskMs: 0, maxIdleMs: 0, maxObserverMs: 0, maxSinkMs: 0, maxBatchBytes: 0, batches: 0, rows: 0 },
+    ring: new Ring(config.ringSize),
+    stats: { commits: 0, walkMs: 0, maxWalkMs: 0, maxTaskMs: 0, maxIdleMs: 0, maxObserverMs: 0, maxSinkMs: 0, maxBatchBytes: 0, batches: 0, rows: 0, spills: 0, spillMs: 0 },
     renderers: new Map(),
     tracksRenderer: null,
     commitSeq: 0,
@@ -184,13 +197,18 @@ export function createShim(g: any, config: Config): Shim {
     watch: new Set(config.watch),
     errors: new Set(),
     idleScheduled: false,
+    taskScheduled: false,
+    channel: null,
+    spilling: false,
+    lastCommitSlot: new Int32Array([-1]),
+    slices: [],
     seq: 0,
     lastDropped: 0,
     acc: new Uint8Array(4096),
     slots: new Int32Array(4096),
   };
   // The ring moves records at times; these hold indices across writes.
-  s.ring.holders.push(s.slots, s.unassignedSpans);
+  s.ring.holders.push(s.slots, s.unassignedSpans, s.lastCommitSlot);
   return s;
 }
 

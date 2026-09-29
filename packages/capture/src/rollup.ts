@@ -79,6 +79,9 @@ export interface MeasureRow {
   on_path_ms: number;
   interference_ms: number;
   waiting_ms: number;
+  // react-log's own work on the page inside the window (its commit walks,
+  // and handing records to capture), taken out of the other buckets.
+  capture_ms: number;
 }
 
 export interface MarkPair {
@@ -706,10 +709,19 @@ export class PageRollup {
     const own = new Set(m.entries);
     const onSpans: [number, number][] = [];
     const otherSpans: [number, number][] = [];
+    const captureSpans: [number, number][] = [];
     let idle = end;
     for (const h of this.held) {
       const r = h.row;
       if (r.ts === null) continue;
+      if (r.kind === 'capture') {
+        const b = r.ts + Math.max(0, r.dur_us ?? 0);
+        if (inWindow(r.ts, b)) {
+          r.measure_instance_id ??= m.id;
+          captureSpans.push([r.ts, b]);
+        }
+        continue;
+      }
       const spans = spansOf(r);
       const rEnd = spans.reduce((e, [, b]) => Math.max(e, b), r.ts + Math.max(0, r.dur_us ?? 0));
       const chain = r.root_update_id !== null && roots.has(r.root_update_id);
@@ -751,8 +763,11 @@ export class PageRollup {
     }
     const within = (spans: [number, number][]) => pieces.reduce((t, [lo, hi]) => t + unionLength(spans, lo, hi), 0);
     const duration = pieces.reduce((t, [lo, hi]) => t + (hi - lo), 0);
-    const on = within(onSpans);
-    const all = within([...onSpans, ...otherSpans]);
+    // Capture's time comes out of whichever bucket it overlaps: a walk runs
+    // inside React's commit task, a spill before its passive effects.
+    const capture = within(captureSpans);
+    const on = within([...onSpans, ...captureSpans]) - capture;
+    const all = within([...onSpans, ...otherSpans, ...captureSpans]) - capture;
     return {
       measure_instance_id: m.id,
       session_id: this.sessionId,
@@ -768,7 +783,8 @@ export class PageRollup {
       duration_ms: duration / 1000,
       on_path_ms: on / 1000,
       interference_ms: (all - on) / 1000,
-      waiting_ms: (duration - all) / 1000,
+      waiting_ms: (duration - all - capture) / 1000,
+      capture_ms: capture / 1000,
     };
   }
 }

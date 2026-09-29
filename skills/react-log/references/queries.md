@@ -8,7 +8,7 @@ Load the views first in every DuckDB session, then run queries by name. Replace 
 
 The segments directory is `segments/` here. Replace it everywhere in this block if it is elsewhere (for example `tests/golden/segments/`).
 
-Sessions captured before a column was added read it as null (`memo` in defs and `dropped_rows` in commits are the newest).
+Sessions captured before a column was added read it as null (the newest: `memo` in defs, `dropped_rows` in commits, `capture_ms` in measures).
 
 ```sql
 CREATE OR REPLACE VIEW events AS
@@ -25,6 +25,8 @@ CREATE OR REPLACE VIEW commits AS
   UNION ALL BY NAME
   SELECT * FROM read_parquet('segments/*/commits-*.parquet', union_by_name = true);
 CREATE OR REPLACE VIEW measures AS
+  SELECT NULL::DOUBLE AS capture_ms WHERE false
+  UNION ALL BY NAME
   SELECT * FROM read_parquet('segments/*/measures-*.parquet', union_by_name = true);
 ```
 
@@ -86,13 +88,13 @@ WHERE session_id = '<session_id>';
 
 ## measure_summary
 
-Interactions (Event Timing) and configured mark pairs. `duration_ms` splits into on-path work (the chains the input started), interference (other work in the window) and waiting (neither: input delay, style, layout, paint).
+Interactions (Event Timing) and configured mark pairs. `duration_ms` splits into on-path work (the chains the input started), interference (other work in the window), capture (react-log's own work on the page) and waiting (none of those: input delay, style, layout, paint).
 
 ```sql
 SELECT name, count(*) AS instances,
        round(median(duration_ms), 1) AS p50_ms, round(quantile_cont(duration_ms, 0.9), 1) AS p90_ms,
        round(median(on_path_ms), 1) AS on_path_p50_ms, round(median(interference_ms), 1) AS interference_p50_ms,
-       round(median(waiting_ms), 1) AS waiting_p50_ms
+       round(median(capture_ms), 1) AS capture_p50_ms, round(median(waiting_ms), 1) AS waiting_p50_ms
 FROM measures
 WHERE session_id = '<session_id>'
 GROUP BY name

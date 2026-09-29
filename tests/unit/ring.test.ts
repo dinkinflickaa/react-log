@@ -3,8 +3,8 @@ import { K_COMMIT, K_RENDER, Ring } from '../../packages/shim/src/ring.ts';
 import { start } from './harness.ts';
 
 // The ring holds a commit's records until capture takes them. It grows
-// rather than drop, keeps every index a writer holds, and drops only past
-// its maximum.
+// rather than drop, keeps every index a writer holds, and drops only when the
+// browser refuses the memory.
 
 const fill = (ring: Ring, n: number) => Array.from({ length: n }, (_, k) => {
   const i = ring.alloc(K_RENDER);
@@ -17,7 +17,7 @@ const fill = (ring: Ring, n: number) => Array.from({ length: n }, (_, k) => {
 
 describe('Ring', () => {
   test('grows past its first size, every record at the index it was written to', () => {
-    const ring = new Ring(4, 64);
+    const ring = new Ring(4);
     const slots = fill(ring, 20);
     expect(ring.dropped).toBe(0);
     expect(ring.cap).toBe(32);
@@ -28,7 +28,7 @@ describe('Ring', () => {
   });
 
   test('at the end of its arrays, moves the unread records to the front and fixes up held indices', () => {
-    const ring = new Ring(8, 64);
+    const ring = new Ring(8);
     const held = new Int32Array([7, 3, -1]);
     ring.holders.push(held);
     fill(ring, 8);
@@ -43,18 +43,21 @@ describe('Ring', () => {
     expect(ring.r0[2]).toBeNull();
   });
 
-  test('drops only when full at its maximum, and counts it, keeping its last slots for commit rows', () => {
-    const ring = new Ring(4, 8);
-    expect(ring.reserve).toBe(1);
-    expect(fill(ring, 10).filter((i) => i < 0)).toHaveLength(3);
-    expect(ring.count).toBe(7);
-    expect(ring.alloc(K_COMMIT)).toBeGreaterThanOrEqual(0);
-    expect(ring.alloc(K_COMMIT)).toBe(-1);
-    expect([ring.dropped, ring.count]).toEqual([4, 8]);
+  test('drops only when the browser refuses the memory, and counts it', () => {
+    const ring = new Ring(4);
+    (ring as any).resize = () => {
+      throw new RangeError('Array buffer allocation failed');
+    };
+    expect(fill(ring, 6).filter((i) => i < 0)).toHaveLength(2);
+    expect([ring.dropped, ring.count, ring.cap]).toEqual([2, 4, 4]);
+    // Room at the front, once read, still takes a record.
+    ring.release(ring.peek());
+    expect(ring.alloc(K_COMMIT)).toBe(3);
+    expect(ring.dropped).toBe(2);
   });
 
   test('empty again, goes back to its first size', () => {
-    const ring = new Ring(4, 64);
+    const ring = new Ring(4);
     fill(ring, 40);
     while (ring.peek() >= 0) ring.release(ring.peek());
     ring.settle();
@@ -64,7 +67,7 @@ describe('Ring', () => {
 
 describe(`the shim on a small ring, React ${process.env.REACT_VERSION}`, () => {
   test('a mount bigger than the ring grows it and loses nothing', async () => {
-    const h = await start({ config: { ringSize: 4, ringMax: 1_000 } });
+    const h = await start({ config: { ringSize: 4 } });
     const rows = h.take();
     const batches = h.messages.filter((m) => m.t === 'batch');
     expect(batches.reduce((n, b) => n + b.dropped, 0)).toBe(0);

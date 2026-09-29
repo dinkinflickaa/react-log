@@ -19,6 +19,7 @@ import {
   VISIBILITY,
 } from './constants.ts';
 import { componentId } from './ids.ts';
+import { afterCommit, r3, SLICE_WALK } from './pipeline.ts';
 import { K_COMMIT, K_RENDER } from './ring.ts';
 import { type Commit, countSpan, type EffectPasses, type Fiber, newCommit, now, type Renderer, type Shim } from './state.ts';
 
@@ -63,6 +64,8 @@ export function onCommit(s: Shim, r: Renderer, root: any, priority: number | und
 
   c.walked = true;
   c.walkMs = now() - t;
+  // The walk is capture's work, not the app's.
+  s.slices.push(r3(t)!, r3(t + c.walkMs)!, SLICE_WALK);
   s.stats.commits++;
   s.stats.walkMs += c.walkMs;
   if (c.walkMs > s.stats.maxWalkMs) s.stats.maxWalkMs = c.walkMs;
@@ -77,6 +80,7 @@ export function onCommit(s: Shim, r: Renderer, root: any, priority: number | und
   } else {
     finalize(s, c);
   }
+  afterCommit(s);
 }
 
 // Passive effects are done for the commit that had them pending.
@@ -87,6 +91,7 @@ export function onPostCommit(s: Shim): void {
   if (Number.isNaN(c.passiveEnd)) c.passiveEnd = now();
   s.pendingPassive = null;
   finalize(s, c);
+  afterCommit(s);
 }
 
 // React flushes pending passive effects before the next commit starts. If
@@ -108,6 +113,7 @@ export function finalize(s: Shim, c: Commit): void {
   }
   s.ring.commit[i] = c.id;
   s.ring.r0[i] = c;
+  s.lastCommitSlot[0] = i;
 }
 
 // passive_sync: a message posted at commit time fires only after the current

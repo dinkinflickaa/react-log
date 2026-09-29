@@ -243,7 +243,7 @@ export function cardText(duckdb: string, dir: string, commitId: string): string 
 CREATE TEMP TABLE h AS
   SELECT c.*, p.display_name AS producer_name, t.display_name AS top1_name,
          m.name AS m_name, m.target AS m_target, m.duration_ms AS m_duration, m.on_path_ms AS m_on,
-         m.interference_ms AS m_interference, m.waiting_ms AS m_waiting
+         m.interference_ms AS m_interference, m.waiting_ms AS m_waiting, m.capture_ms AS m_capture
   FROM commits c
   LEFT JOIN defs p ON p.component_id = c.producer_component_id
   LEFT JOIN defs t ON t.component_id = c.top1_component_id
@@ -289,7 +289,7 @@ SELECT 'commits' AS section, c.commit_id, c.ts, c.total_ms, c.cascade_commit_id,
   out.push(`total ${ms(h.total_ms)} ms = render ${ms(h.render_ms)} + layout ${ms(h.layout_ms)} + passive ${ms(h.passive_ms)}${passiveTask}`);
   if (h.m_name != null) {
     out.push(
-      `measure ${h.m_name}${h.m_target ? ` on ${h.m_target}` : ''} ${ms(h.m_duration)} ms (on path ${ms(h.m_on)}, interference ${ms(h.m_interference)}, waiting ${ms(h.m_waiting)}): ${h.on_critical_path ? 'this commit is on its critical path' : 'this commit is interference'}`,
+      `measure ${h.m_name}${h.m_target ? ` on ${h.m_target}` : ''} ${ms(h.m_duration)} ms (on path ${ms(h.m_on)}, interference ${ms(h.m_interference)}, capture ${ms(h.m_capture ?? 0)}, waiting ${ms(h.m_waiting)}): ${h.on_critical_path ? 'this commit is on its critical path' : 'this commit is interference'}`,
     );
   } else {
     out.push('measure none');

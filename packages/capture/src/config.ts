@@ -14,7 +14,9 @@ export interface CaptureConfig {
   launch: { chromePath: string | null; userDataDir: string; isolate: boolean };
   interactions: { eventTiming: boolean };
   measures: MeasureConfig[];
-  record: { compositeOnly: boolean; values: boolean; stacksOn: string[]; stacksPerBatch: number; watch: string[] };
+  // ringHigh: records the page holds before capture takes them synchronously
+  // (about 250 bytes of page memory each).
+  record: { compositeOnly: boolean; values: boolean; stacksOn: string[]; stacksPerBatch: number; watch: string[]; ringHigh: number };
   segments: { dir: string; rotateSeconds: number; rotateRows: number };
 }
 
@@ -25,7 +27,7 @@ export const DEFAULTS: CaptureConfig = {
   launch: { chromePath: null, userDataDir: '~/.react-log/profile', isolate: false },
   interactions: { eventTiming: true },
   measures: [],
-  record: { compositeOnly: true, values: false, stacksOn: ['update'], stacksPerBatch: 8, watch: [] },
+  record: { compositeOnly: true, values: false, stacksOn: ['update'], stacksPerBatch: 8, watch: [], ringHigh: 250_000 },
   segments: { dir: './segments', rotateSeconds: 10, rotateRows: 200_000 },
 };
 
@@ -54,6 +56,7 @@ export function shimConfig(config: CaptureConfig): object {
   return {
     stacksPerBatch: config.record.stacksOn.includes('update') ? config.record.stacksPerBatch : 0,
     watch: config.record.watch,
+    ringHigh: config.record.ringHigh,
     observe: ['mark', 'measure', 'long-animation-frame', ...(config.interactions.eventTiming ? ['event'] : [])],
   };
 }

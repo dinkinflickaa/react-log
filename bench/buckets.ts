@@ -3,12 +3,13 @@ import { fileURLToPath } from 'node:url';
 import { duckdbPath } from '../packages/capture/src/capture.ts';
 
 // Phase 3 acceptance: every measure's time buckets, recomputed in SQL from
-// the session's events, independently of the rollup code. On-path time is
-// the union of the intervals of the rows the measure stamped on its critical
-// path, interference the union of every other row's intervals inside the
-// window, and waiting the uncovered rest. Unions, never sums: nested
-// intervals (a parent render and its children, a handler and the render
-// inside it) count once.
+// the session's events, independently of the rollup code. Capture time is
+// the union of react-log's own work (capture rows) inside the window;
+// on-path time the union of the intervals of the rows the measure stamped on
+// its critical path, interference the union of every other row's intervals,
+// both less any capture time they overlap; and waiting the uncovered rest.
+// Unions, never sums: nested intervals (a parent render and its children, a
+// handler and the render inside it) count once.
 //
 //   node bench/buckets.ts <session dir>
 
@@ -21,9 +22,11 @@ export interface BucketRow {
   on_path_ms: number;
   interference_ms: number;
   waiting_ms: number;
+  capture_ms: number;
   on_path_re: number;
   interference_re: number;
   waiting_re: number;
+  capture_re: number;
 }
 
 export function bucketsSql(dir: string): string {
@@ -41,7 +44,7 @@ CREATE MACRO merged(t) AS TABLE
   GROUP BY m, kind, run;
 WITH
 seg AS (SELECT * FROM read_parquet('${dir}/seg-*.parquet')),
-measures AS (SELECT * FROM read_parquet('${dir}/measures-*.parquet')),
+measures AS (SELECT NULL::DOUBLE AS capture_ms WHERE false UNION ALL BY NAME SELECT * FROM read_parquet('${dir}/measures-*.parquet', union_by_name = true)),
 -- Main-thread intervals each row stands for, in µs, with its stamps.
 spans AS (
   SELECT measure_instance_id AS mid, on_critical_path AS onp, ts AS a, ts + dur_us AS b
@@ -79,21 +82,32 @@ clipped AS (
   SELECT w.m, greatest(s.a, w.lo) AS a, least(s.b, w.hi) AS b, coalesce(s.onp AND s.mid = w.m, false) AS on_path
   FROM win w JOIN spans s ON s.a IS NOT NULL AND s.b IS NOT NULL AND s.b > w.lo AND s.a < w.hi
 ),
+-- react-log's own work: its commit walks and its hand-offs to capture.
+captured AS (
+  SELECT w.m, greatest(c.ts, w.lo) AS a, least(c.ts + c.dur_us, w.hi) AS b
+  FROM win w JOIN seg c ON c.kind = 'capture' AND c.dur_us > 0 AND c.ts + c.dur_us > w.lo AND c.ts < w.hi
+),
+-- 'all' and 'on' include capture time, which comes out of both below.
 sets AS (
   SELECT m, 'all' AS kind, a, b FROM clipped WHERE b > a
   UNION ALL
   SELECT m, 'on', a, b FROM clipped WHERE b > a AND on_path
+  UNION ALL
+  SELECT m, kind, a, b FROM captured, (VALUES ('all'), ('on'), ('capture')) k(kind) WHERE b > a
 ),
 unions AS (SELECT m, kind, sum(b - a) AS us FROM merged(sets) GROUP BY m, kind),
 windows AS (SELECT m, sum(hi - lo) AS us FROM win GROUP BY m)
 SELECT x.measure_instance_id, x.name, x.duration_ms, w.us / 1000 AS window_ms, x.on_path_ms, x.interference_ms, x.waiting_ms,
-       coalesce(o.us, 0) / 1000 AS on_path_re,
+       coalesce(x.capture_ms, 0) AS capture_ms,
+       (coalesce(o.us, 0) - coalesce(c.us, 0)) / 1000 AS on_path_re,
        (coalesce(a.us, 0) - coalesce(o.us, 0)) / 1000 AS interference_re,
-       w.us / 1000 - coalesce(a.us, 0) / 1000 AS waiting_re
+       w.us / 1000 - coalesce(a.us, 0) / 1000 AS waiting_re,
+       coalesce(c.us, 0) / 1000 AS capture_re
 FROM measures x
 JOIN windows w ON w.m = x.measure_instance_id
 LEFT JOIN unions o ON o.m = x.measure_instance_id AND o.kind = 'on'
 LEFT JOIN unions a ON a.m = x.measure_instance_id AND a.kind = 'all'
+LEFT JOIN unions c ON c.m = x.measure_instance_id AND c.kind = 'capture'
 ORDER BY x.ts_start`;
 }
 
@@ -102,18 +116,19 @@ export function recomputeBuckets(dir: string, duckdb = duckdbPath()): BucketRow[
   return out === '' ? [] : JSON.parse(out);
 }
 
-// The acceptance bar: the three buckets sum to the duration within 5% with
+// The acceptance bar: the four buckets sum to the duration within 5% with
 // none negative, and each matches its recomputation within 5% (or 0.05 ms).
 export function bucketProblems(r: BucketRow): string[] {
   const out: string[] = [];
   const near = (x: number, y: number) => Math.abs(x - y) <= Math.max(0.05, 0.05 * r.duration_ms);
   if (!near(r.window_ms, r.duration_ms)) out.push(`duration ${r.duration_ms.toFixed(3)} != window ${r.window_ms.toFixed(3)}`);
-  const sum = r.on_path_ms + r.interference_ms + r.waiting_ms;
+  const sum = r.on_path_ms + r.interference_ms + r.waiting_ms + r.capture_ms;
   if (!near(sum, r.duration_ms)) out.push(`sum ${sum.toFixed(3)} != duration ${r.duration_ms.toFixed(3)}`);
-  for (const k of ['on_path_ms', 'interference_ms', 'waiting_ms'] as const) if (r[k] < -1e-6) out.push(`${k} negative (${r[k]})`);
+  for (const k of ['on_path_ms', 'interference_ms', 'waiting_ms', 'capture_ms'] as const) if (r[k] < -1e-6) out.push(`${k} negative (${r[k]})`);
   if (!near(r.on_path_ms, r.on_path_re)) out.push(`on_path ${r.on_path_ms.toFixed(3)} vs recomputed ${r.on_path_re.toFixed(3)}`);
   if (!near(r.interference_ms, r.interference_re)) out.push(`interference ${r.interference_ms.toFixed(3)} vs recomputed ${r.interference_re.toFixed(3)}`);
   if (!near(r.waiting_ms, r.waiting_re)) out.push(`waiting ${r.waiting_ms.toFixed(3)} vs recomputed ${r.waiting_re.toFixed(3)}`);
+  if (!near(r.capture_ms, r.capture_re)) out.push(`capture ${r.capture_ms.toFixed(3)} vs recomputed ${r.capture_re.toFixed(3)}`);
   return out;
 }
 
@@ -125,13 +140,13 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   }
   const rows = recomputeBuckets(dir);
   const f = (x: number) => x.toFixed(2).padStart(8);
-  console.log(`${'measure'.padEnd(28)} ${'name'.padEnd(12)} duration   on_path interfere   waiting | recomputed: on_path interfere   waiting`);
+  console.log(`${'measure'.padEnd(28)} ${'name'.padEnd(12)} duration   on_path interfere   waiting   capture | recomputed: on_path interfere   waiting   capture`);
   let failed = 0;
   for (const r of rows) {
     const problems = bucketProblems(r);
     if (problems.length > 0) failed++;
     console.log(
-      `${r.measure_instance_id.padEnd(28)} ${r.name.padEnd(12)} ${f(r.duration_ms)} ${f(r.on_path_ms)} ${f(r.interference_ms)} ${f(r.waiting_ms)} |            ${f(r.on_path_re)} ${f(r.interference_re)} ${f(r.waiting_re)}${problems.length > 0 ? `  FAIL: ${problems.join('; ')}` : ''}`,
+      `${r.measure_instance_id.padEnd(28)} ${r.name.padEnd(12)} ${f(r.duration_ms)} ${f(r.on_path_ms)} ${f(r.interference_ms)} ${f(r.waiting_ms)} ${f(r.capture_ms)} |            ${f(r.on_path_re)} ${f(r.interference_re)} ${f(r.waiting_re)} ${f(r.capture_re)}${problems.length > 0 ? `  FAIL: ${problems.join('; ')}` : ''}`,
     );
   }
   console.log(`${rows.length} measures, ${failed} failing: ${failed === 0 && rows.length > 0 ? 'PASS' : 'FAIL'}`);
