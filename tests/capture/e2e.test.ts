@@ -84,6 +84,9 @@ describe.each(['19.3.0', '18.3.1'])('capture against the lab on React %s', (vers
       expect(info.errors).toEqual([]);
       expect(info.dropped).toBe(0);
       expect(info.ended_at).not.toBeNull();
+      // Run from this repository: the commit, and whether tracked files had changes.
+      expect(info.git_sha).toMatch(/^[0-9a-f]{40}$/);
+      expect(typeof info.git_dirty).toBe('boolean');
       const [{ n }] = sql(`SELECT count(*) AS n FROM read_parquet('${s.dir}/seg-*.parquet')`);
       expect(n).toBe(info.rows);
       expect(n).toBeGreaterThan(0);
@@ -112,6 +115,33 @@ describe.each(['19.3.0', '18.3.1'])('capture against the lab on React %s', (vers
     // The element is created on this line of LargeList.
     expect(d.source_line).toBe(151);
     expect(d.owner_path).toMatch(/LargeList>LargeItem#\d+$/);
+  });
+
+  test("never gives a component React's own source, and marks memoized ones", () => {
+    // Past React 19's owner-stack budget (10,000 elements a second) an element
+    // shares a placeholder stack: it borrows the source of an element from the
+    // same JSX site, or has none, never the JSX runtime's.
+    const [{ react }] = sql(`SELECT count(*) AS react FROM ${defs} WHERE source_file LIKE '%node_modules%' OR source_file LIKE '%react-%'`);
+    expect(Number(react)).toBe(0);
+    // Each list's 3,000 items, the later ones created past the budget at mount.
+    const lists = sql(`
+      SELECT display_name, count(DISTINCT component_id) AS items, count(DISTINCT source_file || ':' || source_line) AS sites,
+             count(DISTINCT component_id) FILTER (source_file IS NULL) AS unknown, any_value(source_line) AS line
+      FROM ${defs} WHERE display_name IN ('LargeItem', 'SidebarItem') GROUP BY 1 ORDER BY 1`);
+    expect(lists.map((r) => ({ ...r, items: Number(r.items), sites: Number(r.sites), unknown: Number(r.unknown) }))).toEqual([
+      { display_name: 'LargeItem', items: 3000, sites: 1, unknown: 0, line: 151 },
+      { display_name: 'SidebarItem', items: 3000, sites: 1, unknown: 0, line: 182 },
+    ]);
+    const memo = sql<{ display_name: string; memo: boolean[] }>(`
+      SELECT display_name, list(DISTINCT memo) AS memo FROM ${defs}
+      WHERE display_name IN ('LargeItem', 'SidebarItem', 'LargeList', 'Sidebar', 'Cell') GROUP BY 1 ORDER BY 1`);
+    expect(Object.fromEntries(memo.map((r) => [r.display_name, r.memo]))).toEqual({
+      Cell: [false],
+      LargeItem: [true],
+      LargeList: [false],
+      Sidebar: [false],
+      SidebarItem: [true],
+    });
   });
 
   test('maps update call sites to original source', () => {
@@ -163,8 +193,9 @@ describe.each(['19.3.0', '18.3.1'])('capture against the lab on React %s', (vers
     expect(card.trimEnd().split('\n').length).toBeLessThanOrEqual(60);
     expect(card).toMatch(/^cause click -> LargeList at onClick \(lab\/Lab\.jsx:\d+:\d+\)$/m);
     expect(card).toMatch(/top type LargeItem x3,000/);
-    // LargeItem was watched: the card says which prop changed, and how.
-    expect(card).toMatch(/^ {2}LargeItem +lab\/Lab\.jsx:151 +3,000 .* props +onSelect:identity_only$/m);
+    // LargeItem was watched: the card says which prop changed, and how, and
+    // that LargeItem is memoized.
+    expect(card).toMatch(/^ {2}LargeItem +lab\/Lab\.jsx:151 +yes +3,000 .* props +onSelect:identity_only$/m);
     expect(card).toMatch(/<- this commit$/m);
     const [{ n }] = JSON.parse(querySql(duckdb, segments, 'SELECT count(*) AS n FROM commits', { session, format: 'json' }));
     expect(n).toBeGreaterThan(0);

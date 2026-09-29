@@ -36,11 +36,12 @@ A share is dominant when it is at least 0.5. A commit has no-op fan-out when one
 | effect_share dominant | effect_shape | split, defer or cache effect work, fix deps, move layout reads before writes |
 | top1_share dominant | hoist_render_work | move computation out of the render body, useMemo it, or move it to module scope |
 | noop_share dominant or no-op fan-out, and the no-op renders' reason is `context` (or a store hook in `changed_hooks`) | narrow_input | split the context or narrow the selector, at the provider |
-| same, reason `props`, and `changed_keys` says `identity_only` for a function or object prop | stabilize_producer | useCallback or useMemo for that prop where the producer creates it |
+| same, reason `props`, `changed_keys` says `identity_only` for a function or object prop, and the component is memoized (`memo` yes on the card) | stabilize_producer | useCallback or useMemo for that prop where the producer creates it |
+| same, but the component is not memoized (`memo` no) | memo_boundary | React.memo the component, and in the same patch give the identity-only prop a stable value; either alone changes nothing |
 | same, reason `parent` (props equal, the parent re-rendered) | memo_boundary | React.memo the highest component whose subtree commits nothing |
 | no dominant share, most renders committed | bail diffuse_genuine_work | none: the work is the output |
 
-If the verdict depends on whether props changed by identity only or by value and `changed_keys` is empty, do not guess. Run `react-log watch <name>`, ask the user for one more capture of the same interaction, then run `card_changed_keys`. If no capture is possible, bail design_change and name the component to watch. Anything the table does not cover is a bail with reason design_change.
+An empty `memo` means the capture predates it: read the component's definition to tell. If the verdict depends on whether props changed by identity only or by value and `changed_keys` is empty, do not guess. Run `react-log watch <name>`, ask the user for one more capture of the same interaction, then run `card_changed_keys`. If no capture is possible, bail design_change and name the component to watch. Anything the table does not cover is a bail with reason design_change.
 
 ## Fix vocabulary, only these
 
@@ -85,7 +86,7 @@ Write `findings.json`: a JSON array with one entry per signature examined, most 
 3. `evidence_query` is the `finding_numbers` query with the commit id filled in, complete, runnable as written after the views.
 4. `cause.producer` is the card's producer; `cause.cascade` is true when the card says `cascade of`.
 5. `components` lists every component the entry names anywhere, spelled as in `defs.display_name`.
-6. For a fix: `patch` is the file the fix edits (the component's `source_file` in defs) and `fix_summary` names the component and the change in one sentence. For a bail: `fix_class` and `patch` are null, and `fix_summary` says in one sentence which evidence decided it.
+6. For a fix: `patch` is the file the fix edits (the component's `source_file` in defs; when it is empty, as for elements React 19 dev created past its owner-stack budget, the nearest owner in `owner_path` that has one) and `fix_summary` names the component and the change in one sentence. For a bail: `fix_class` and `patch` are null, and `fix_summary` says in one sentence which evidence decided it.
 
 ## Guardrails
 

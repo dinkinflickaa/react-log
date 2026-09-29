@@ -32,6 +32,8 @@ export const SCHEMAS: Record<Family, [name: string, type: string][]> = {
     ['source_line', 'INTEGER'],
     ['source_column', 'INTEGER'],
     ['owner_path', 'VARCHAR'],
+    // React.memo or PureComponent: React skips the render on equal props.
+    ['memo', 'BOOLEAN'],
   ],
   commits: [
     ['commit_id', 'VARCHAR'],

@@ -1,4 +1,4 @@
-import { startTransition, useEffect, useLayoutEffect, useState, useSyncExternalStore } from 'react';
+import { memo, startTransition, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { createRoot } from 'react-dom/client';
 
 // Update chains for the capture tests: what the chain linker connects.
@@ -13,6 +13,13 @@ import { createRoot } from 'react-dom/client';
 //                update row
 //   #slow        a handler that computes for 40 ms before it sets state, so
 //                the click gets an Event Timing entry
+//   #pulse       two Pulses whose layout effects have slow cleanups: on an
+//                update each logs two effect spans on 19.2+ (the cleanup in
+//                the mutation pass, the effect in the layout pass)
+//   #prune       removes the middle of three Leaves while the other two re-run
+//                their effects, and re-runs two nested Nests: on 19.2+ the
+//                spans must find the deleted Leaf, and the inner Nest before
+//                the outer (React logs a fiber after its subtree)
 //
 // With ?ticker, a clock also re-renders every 10 ms from a timer: work inside
 // an interaction's window that the interaction did not cause (interference).
@@ -121,6 +128,72 @@ function Ticker() {
   return <p id="ticker">ticks {ticks}</p>;
 }
 
+// React names a memo component's effect spans after the inner function
+// (PulseBody), and the capture after the wrapper's displayName (Pulse).
+const Pulse = memo(function PulseBody({ ms, tick }) {
+  const ref = useRef(null);
+  useLayoutEffect(() => {
+    spin(ms);
+    ref.current.dataset.tick = String(tick);
+    return () => spin(0.3);
+  }, [ms, tick]);
+  return <span ref={ref}>pulse {tick}</span>;
+});
+Pulse.displayName = 'Pulse';
+
+function Pulses() {
+  const [tick, setTick] = useState(0);
+  return (
+    <section>
+      <button id="pulse" onClick={() => setTick((t) => t + 1)}>
+        pulse {tick}
+      </button>
+      <Pulse key="short" ms={1} tick={tick} />
+      <Pulse key="long" ms={6} tick={tick} />
+    </section>
+  );
+}
+
+// Each Leaf's cleanups take their own time, so its spans tell them apart.
+const LEAF_MS = [1, 12, 5];
+
+function Leaf({ id, count }) {
+  useLayoutEffect(() => {
+    spin(0.2);
+    return () => spin(LEAF_MS[id]);
+  }, [id, count]);
+  useEffect(() => {
+    spin(0.2);
+    return () => spin(LEAF_MS[id]);
+  }, [id, count]);
+  return <li>leaf {id}</li>;
+}
+
+// One name, nested: the outer Nest's effect takes 6 ms, the inner's 1 ms.
+function Nest({ depth, count }) {
+  useLayoutEffect(() => {
+    spin(depth === 0 ? 1 : 6);
+  }, [depth, count]);
+  return depth === 0 ? <span>nest {count}</span> : <Nest depth={depth - 1} count={count} />;
+}
+
+function Leaves() {
+  const [ids, setIds] = useState([0, 1, 2]);
+  return (
+    <section>
+      <button id="prune" onClick={() => setIds((list) => list.filter((id) => id !== 1))}>
+        prune {ids.length}
+      </button>
+      <ul>
+        {ids.map((id) => (
+          <Leaf key={id} id={id} count={ids.length} />
+        ))}
+      </ul>
+      <Nest depth={1} count={ids.length} />
+    </section>
+  );
+}
+
 const ticker = new URLSearchParams(location.search).has('ticker');
 
 function Chains() {
@@ -131,6 +204,8 @@ function Chains() {
       <Transition />
       <Store />
       <Slow />
+      <Pulses />
+      <Leaves />
       {ticker && <Ticker />}
     </main>
   );

@@ -4,7 +4,7 @@ import { installObserver } from './observer.ts';
 import { flushNow, post, scheduleIdle } from './pipeline.ts';
 import { K_WATCH } from './ring.ts';
 import { type Config, createShim, DEFAULT_CONFIG, now, type Renderer, type Shim, type Stats } from './state.ts';
-import { onCommit, onPostCommit } from './walk.ts';
+import { onCommit, onPostCommit, onUnmount } from './walk.ts';
 
 export const SHIM_VERSION = '0.1.0';
 
@@ -102,7 +102,14 @@ function installHook(s: Shim, api: ShimApi): void {
       }
     },
     onScheduleFiberRoot(): void {},
-    onCommitFiberUnmount(): void {},
+    onCommitFiberUnmount(id: number, fiber: any): void {
+      if (!s.renderers.has(id)) return;
+      try {
+        onUnmount(s, fiber);
+      } catch (e) {
+        report(s, e);
+      }
+    },
     setStrictMode(): void {},
     checkDCE(): void {},
   };

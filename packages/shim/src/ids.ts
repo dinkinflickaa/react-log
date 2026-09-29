@@ -1,4 +1,4 @@
-import { CONTEXT_CONSUMER, FORWARD_REF, SIMPLE_MEMO_COMPONENT } from './constants.ts';
+import { CLASS_COMPONENT, CONTEXT_CONSUMER, FORWARD_REF, MEMO_COMPONENT, SIMPLE_MEMO_COMPONENT } from './constants.ts';
 import { parseFrames } from './frames.ts';
 import type { Fiber, Shim } from './state.ts';
 
@@ -56,29 +56,51 @@ export interface Source {
 
 const ELEMENT_FACTORY = /(^|\.)(jsxDEV|jsxDEVImpl|jsxs|jsx|jsxProd|createElement|cloneElement|createElementWithValidation|jsxWithValidation)$/;
 
+// The JSX site an element comes from, as its owner path without keys: the
+// items of one list share it.
+export function siteOf(path: string): string {
+  return path.replace(/#[^>]*/g, '');
+}
+
 // Where the element for this fiber was created. React 18 records it in
-// _debugSource; React 19.1+ keeps an Error captured in the JSX runtime in
-// _debugStack, whose first frame outside the runtime is the call site.
-// React 19.0 records neither.
-export function sourceOf(s: Shim, fiber: Fiber, name: string): Source | null {
+// _debugSource; React 19.1+ keeps an Error captured in the element factory
+// (jsxDEV, createElement) in _debugStack, whose first frame past the factory
+// is the call site. React 19.0 records neither.
+//
+// Past React's owner-stack budget (10,000 elements a second in 19.1 to 19.3)
+// every element gets one shared placeholder Error, made at load by the JSX
+// runtime, whose frames never start in the factory. It says nothing about
+// the element, so the source comes from another element of the same JSX
+// site if one had a real stack, else it is unknown. React never refreshes a
+// fiber's _debugStack, so a component past the budget at mount stays so.
+export function sourceOf(s: Shim, fiber: Fiber, path: string): Source | null {
   const src = fiber._debugSource;
   if (src != null && typeof src.fileName === 'string') {
     return { file: src.fileName, line: src.lineNumber ?? 0, column: src.columnNumber ?? 0 };
   }
   const err = fiber._debugStack;
   if (err == null || typeof err !== 'object') return null;
-  // Past React's owner-stack limit every element shares one placeholder
-  // Error. Seeing one Error under two component names marks it unusable.
-  const seen = s.stackOwner.get(err);
-  if (seen !== undefined && seen !== name) return null;
-  s.stackOwner.set(err, name);
+  const site = siteOf(path);
   const frames = parseFrames(String((err as Error).stack ?? ''));
+  if (frames.length === 0 || !ELEMENT_FACTORY.test(frames[0]!.fn)) return s.sourceBySite.get(site) ?? null;
   for (const f of frames) {
     if (ELEMENT_FACTORY.test(f.fn)) continue;
     if (f.file === '') return null;
-    return { file: f.file, line: f.line, column: f.column };
+    const found = { file: f.file, line: f.line, column: f.column };
+    if (s.sourceBySite.size >= 50_000) s.sourceBySite.clear();
+    s.sourceBySite.set(site, found);
+    return found;
   }
   return null;
+}
+
+// Whether React skips this component's render when its props are equal:
+// React.memo (the inner fiber of a MemoComponent, or a SimpleMemoComponent)
+// or a PureComponent class.
+export function isMemo(fiber: Fiber): boolean {
+  if (fiber.tag === SIMPLE_MEMO_COMPONENT) return true;
+  if (fiber.return != null && fiber.return.tag === MEMO_COMPONENT) return true;
+  return fiber.tag === CLASS_COMPONENT && fiber.type?.prototype?.isPureReactComponent === true;
 }
 
 // Stable component_id: a 53-bit hash of the owner path (names and keys) and
@@ -99,11 +121,11 @@ export function componentId(s: Shim, fiber: Fiber): string {
   id = s.idByPath.get(path);
   if (id === undefined) {
     if (s.idByPath.size >= 50_000) s.idByPath.clear();
-    const src = sourceOf(s, fiber, name);
+    const src = sourceOf(s, fiber, path);
     id = hash53(src === null ? path : `${path}|${src.file}:${src.line}:${src.column}`);
     s.idByPath.set(path, id);
-    s.defs.push([id, name, src?.file ?? null, src?.line ?? null, src?.column ?? null, path]);
-    s.defBytes += 40 + id.length + name.length + path.length + (src?.file.length ?? 0);
+    s.defs.push([id, name, src?.file ?? null, src?.line ?? null, src?.column ?? null, path, isMemo(fiber)]);
+    s.defBytes += 46 + id.length + name.length + path.length + (src?.file.length ?? 0);
   }
   s.idByFiber.set(fiber, id);
   if (alt != null) s.idByFiber.set(alt, id);

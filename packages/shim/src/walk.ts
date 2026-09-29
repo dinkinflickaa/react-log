@@ -1,20 +1,26 @@
 import {
   CALLBACK,
   CHILD_DELETION,
+  CLASS_COMPONENT,
   CONTENT_RESET,
   HOST_TEXT,
   HYDRATING,
   isComposite,
   isHost,
+  LAYOUT_STATIC,
+  OFFSCREEN_COMPONENT,
   PASSIVE,
+  PASSIVE_STATIC,
   PERFORMED_WORK,
   PLACEMENT,
+  REF,
   STRICT_LEGACY_MODE,
   UPDATE,
   VISIBILITY,
 } from './constants.ts';
+import { componentId } from './ids.ts';
 import { K_COMMIT, K_RENDER } from './ring.ts';
-import { type Commit, type Fiber, newCommit, now, type Renderer, type Shim } from './state.ts';
+import { type Commit, countSpan, type EffectPasses, type Fiber, newCommit, now, type Renderer, type Shim } from './state.ts';
 
 // Bits in ring.n0 for render records.
 export const R_COMMITTED = 1;
@@ -47,7 +53,10 @@ export function onCommit(s: Shim, r: Renderer, root: any, priority: number | und
   walk(s, r, root.current, c);
 
   const spans = s.unassignedSpans;
-  for (let i = 0; i < spans.length; i++) s.ring.commit[spans[i]!] = c.id;
+  for (let i = 0; i < spans.length; i++) {
+    s.ring.commit[spans[i]!] = c.id;
+    countSpan(c, s.ring.r0[spans[i]!] as string, false);
+  }
   spans.length = 0;
 
   c.walked = true;
@@ -128,6 +137,11 @@ function walk(s: Shim, r: Renderer, top: Fiber, c: Commit): void {
   const slots = s.slots;
   const max = acc.length - 1;
   const line = r.line;
+  // 19.2+ names the component of an effect span but not the fiber: note the
+  // fibers each commit pass visits, outside hidden subtrees (no effects run
+  // there), in React's order.
+  const passes = line.id === '19.2+';
+  let hiddenAt = -1;
   let node: Fiber = top;
   let depth = 0;
 
@@ -141,7 +155,6 @@ function walk(s: Shim, r: Renderer, top: Fiber, c: Commit): void {
       if ((node.flags & PERFORMED_WORK) !== 0) slot = recordRender(s, c, node, alt);
       else c.bailouts++;
       own = (node.flags & (PLACEMENT | UPDATE | CHILD_DELETION | CALLBACK | PASSIVE)) !== 0 ? 1 : 0;
-      if (own === 1 && line.id === '19.2+') (c.effectFibers ??= []).push(node);
     } else if (isHost(tag)) {
       own = hostChanged(node, alt) ? 1 : 0;
     } else {
@@ -154,6 +167,10 @@ function walk(s: Shim, r: Renderer, top: Fiber, c: Commit): void {
     if ((node.subtreeFlags & (PLACEMENT | HYDRATING)) !== 0) own = 1;
     acc[depth] = own;
     slots[depth] = slot;
+    if (passes && hiddenAt < 0) {
+      if (tag === OFFSCREEN_COMPONENT && node.memoizedState !== null) hiddenAt = depth;
+      else if ((node.flags & CHILD_DELETION) !== 0 && node.deletions != null) passDeleted(c, node.deletions);
+    }
 
     const child: Fiber = node.child;
     if (child !== null && (alt === null || child !== alt.child) && depth < max) {
@@ -167,6 +184,10 @@ function walk(s: Shim, r: Renderer, top: Fiber, c: Commit): void {
       const done = acc[depth]!;
       const s0 = slots[depth]!;
       if (s0 >= 0 && (done === 1 || (s.ring.n0[s0]! & R_MOUNT) !== 0)) s.ring.n0[s0]! |= R_COMMITTED;
+      if (passes) {
+        if (hiddenAt === depth) hiddenAt = -1;
+        else if (hiddenAt < 0 && isComposite(node.tag)) passFiber(c, node, line.layoutMask);
+      }
       if (depth === 0) break outer;
       if (done === 1) acc[depth - 1] = 1;
       if (node.sibling !== null) {
@@ -177,6 +198,67 @@ function walk(s: Shim, r: Renderer, top: Fiber, c: Commit): void {
       depth--;
     }
   }
+}
+
+// A fiber of this commit in the passes that run its effects, as the walk
+// leaves it (React logs a fiber's span after its subtree's). Cleanups run
+// only for a fiber that was there before this commit.
+function passFiber(c: Commit, f: Fiber, layoutMask: number): void {
+  const flags: number = f.flags;
+  if ((flags & (layoutMask | PASSIVE)) === 0) return;
+  const p = (c.passes ??= newPasses());
+  const updated = f.alternate !== null;
+  if (updated && (flags & (UPDATE | REF)) !== 0) p.mutation.push(f);
+  if ((flags & layoutMask) !== 0) p.layout.push(f);
+  if ((flags & PASSIVE) !== 0) {
+    if (updated) p.unmount.push(f);
+    p.mount.push(f);
+  }
+}
+
+// A parent's deleted subtrees, which React cleans up before the parent's
+// other children: in the mutation pass it logs a fiber's layout cleanups
+// after its subtree's, in the unmount pass its passive cleanups before.
+function passDeleted(c: Commit, deletions: Fiber[]): void {
+  const p = (c.passes ??= newPasses());
+  for (const top of deletions) {
+    let f: Fiber = top;
+    subtree: for (;;) {
+      if (isComposite(f.tag) && (f.flags & PASSIVE_STATIC) !== 0) p.unmount.push(f);
+      const hidden = f.tag === OFFSCREEN_COMPONENT && f.memoizedState !== null;
+      if (!hidden && f.child != null) {
+        f = f.child;
+        continue;
+      }
+      for (;;) {
+        if (isComposite(f.tag) && hasLayoutCleanup(f)) p.mutation.push(f);
+        if (f === top) break subtree;
+        if (f.sibling != null) {
+          f = f.sibling;
+          break;
+        }
+        const up = f.return;
+        if (up == null) break subtree;
+        f = up;
+      }
+    }
+  }
+}
+
+function hasLayoutCleanup(f: Fiber): boolean {
+  if ((f.flags & LAYOUT_STATIC) !== 0) return true;
+  return f.tag === CLASS_COMPONENT && typeof f.stateNode?.componentWillUnmount === 'function';
+}
+
+function newPasses(): EffectPasses {
+  return { mutation: [], layout: [], unmount: [], mount: [] };
+}
+
+// React clears a deleted fiber's owner once its passive cleanups have run. A
+// component that mounts and unmounts before the idle pipeline reaches its
+// rows would lose its owner path, so its id is taken now.
+export function onUnmount(s: Shim, fiber: Fiber): void {
+  if (isComposite(fiber.tag) && !s.idByFiber.has(fiber)) componentId(s, fiber);
 }
 
 function recordRender(s: Shim, c: Commit, fiber: Fiber, alt: Fiber): number {

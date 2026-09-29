@@ -13,14 +13,14 @@ import {
   K_WATCH,
   K_YIELD,
 } from './ring.ts';
-import { type Commit, type Fiber, now, type Shim } from './state.ts';
+import { type Commit, type EffectIndex, type EffectPasses, type Fiber, now, type Shim } from './state.ts';
 import { R_COMMITTED, R_FORCED, R_MOUNT, R_STRICT } from './walk.ts';
 import { classifyKeys, whyRendered } from './why.ts';
 
 // Wire format, one JSON message per sink call:
 //   {t:"hello"|"renderer"|"refused"|"error", ...}
 //   {t:"batch", seq, dropped, defs, rows}
-// defs: [component_id, display_name, source_file, source_line, source_column, owner_path]
+// defs: [component_id, display_name, source_file, source_line, source_column, owner_path, memo]
 // rows: [kind, ts, dur_us, self_us, lane, component_id, commit, reason_code,
 //        changed_hooks, changed_context, changed_keys, committed, call_site, extra]
 // ts is performance.now() ms on the page's clock; hello carries timeOrigin.
@@ -271,26 +271,24 @@ function commitRow(c: Commit): unknown[] {
   ];
 }
 
-// 19.2+: React names the component but not the fiber. Match the k-th span
-// for a name to the k-th fiber with that name and effect flags, post-order,
-// per phase. Unmount effects of deleted fibers find no match.
+// 19.2+: React names the component but not the fiber. In each phase it runs
+// two passes, cleanups then effects (mutation then layout; passive unmount
+// then passive mount), and logs a fiber's work in a pass that took over
+// 0.05 ms, so one component can have two spans in a phase. The walk noted
+// each pass's fibers in the order React visits them (EffectPasses).
 function effectSpanRow(s: Shim, i: number, commitId: number): unknown[] {
   const ring = s.ring;
   const name = ring.r0[i] as string;
   const passive = (ring.n0[i]! & SPAN_PASSIVE) !== 0;
   const c = s.commits.get(commitId);
   let id: string | null = null;
-  if (c !== undefined && c.effectFibers !== null) {
-    const cursors = (c.effectCursors ??= { layout: new Map(), passive: new Map() });
-    const cursor = passive ? cursors.passive : cursors.layout;
-    const list = c.effectFibers;
-    for (let k = cursor.get(name) ?? 0; k < list.length; k++) {
-      if (displayName(list[k]) === name) {
-        id = componentId(s, list[k]);
-        cursor.set(name, k + 1);
-        break;
-      }
-    }
+  if (c !== undefined && c.passes !== null) {
+    const index = (c.effectIndex ??= indexEffects(c.passes));
+    const key = `${passive ? 'p' : 'l'}|${name}`;
+    const k = index.cursor.get(key) ?? 0;
+    index.cursor.set(key, k + 1);
+    const fiber = pairSpan(index, passive, name, k, c.spanCounts?.get(key) ?? 0);
+    if (fiber != null) id = componentId(s, fiber);
   }
   return [
     passive ? 'passive_effect' : 'layout_effect',
@@ -308,6 +306,50 @@ function effectSpanRow(s: Shim, i: number, commitId: number): unknown[] {
     null,
     { name },
   ];
+}
+
+// The fiber of the k-th of n spans for a name in a phase. Spans past the
+// effect pass's fibers are cleanups, which come first; with fewer spans than
+// fibers in a pass, the first fibers are taken. Spans no pass explains (an
+// Activity or Suspense boundary hiding or showing its content runs every
+// effect in it) go to the name's one fiber if it has only one.
+function pairSpan(index: EffectIndex, passive: boolean, name: string, k: number, n: number): Fiber | null | undefined {
+  const pair = (passive ? index.passive : index.layout).get(name);
+  if (pair !== undefined) {
+    const extra = n - pair.create.length;
+    if (k >= extra) return pair.create[k - Math.max(extra, 0)];
+    if (k < pair.cleanup.length) return pair.cleanup[k];
+  }
+  return index.only.get(name);
+}
+
+// The name React gives a fiber's effect spans: for a function or class its
+// displayName or name, which for React.memo is the inner function's, where
+// displayName() prefers the memo wrapper's displayName.
+function spanName(f: Fiber): string {
+  const type = f.type;
+  if (typeof type === 'function') return type.displayName || type.name || '';
+  return displayName(f);
+}
+
+function indexEffects(p: EffectPasses): EffectIndex {
+  const index: EffectIndex = { layout: new Map(), passive: new Map(), only: new Map(), cursor: new Map() };
+  const names = new Map<Fiber, string>();
+  const add = (m: EffectIndex['layout'], side: 'cleanup' | 'create', f: Fiber) => {
+    let name = names.get(f);
+    if (name === undefined) names.set(f, (name = spanName(f)));
+    let pair = m.get(name);
+    if (pair === undefined) m.set(name, (pair = { cleanup: [], create: [] }));
+    pair[side].push(f);
+    const one = index.only.get(name);
+    if (one === undefined) index.only.set(name, f);
+    else if (one !== f) index.only.set(name, null);
+  };
+  for (const f of p.mutation) add(index.layout, 'cleanup', f);
+  for (const f of p.layout) add(index.layout, 'create', f);
+  for (const f of p.unmount) add(index.passive, 'cleanup', f);
+  for (const f of p.mount) add(index.passive, 'create', f);
+  return index;
 }
 
 // The stack goes out as V8's text: the capture program finds the call site

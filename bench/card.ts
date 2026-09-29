@@ -100,6 +100,7 @@ function generate(dir: string, duckdb: string): void {
         renderers: [],
         shim_version: null,
         git_sha: null,
+        git_dirty: null,
         config: {},
         page_loads: [{ page_load_id: 1, url: 'synthetic://five-million-rows', token: 'synthetic', time_origin: 0 }],
         refused: null,

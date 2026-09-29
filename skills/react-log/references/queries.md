@@ -8,18 +8,22 @@ Load the views first in every DuckDB session, then run queries by name. Replace 
 
 The segments directory is `segments/` here. Replace it everywhere in this block if it is elsewhere (for example `tests/golden/segments/`).
 
+Sessions captured before a column was added read it as null (`memo` is the newest).
+
 ```sql
 CREATE OR REPLACE VIEW events AS
-  SELECT * FROM read_parquet('segments/*/seg-*.parquet');
+  SELECT * FROM read_parquet('segments/*/seg-*.parquet', union_by_name = true);
 CREATE OR REPLACE VIEW defs AS
   SELECT component_id, any_value(display_name) AS display_name, any_value(source_file) AS source_file,
-         any_value(source_line) AS source_line, any_value(owner_path) AS owner_path
-  FROM read_parquet('segments/*/defs-*.parquet')
+         any_value(source_line) AS source_line, any_value(owner_path) AS owner_path, any_value(memo) AS memo
+  FROM (SELECT NULL::BOOLEAN AS memo WHERE false
+        UNION ALL BY NAME
+        SELECT * FROM read_parquet('segments/*/defs-*.parquet', union_by_name = true))
   GROUP BY component_id;
 CREATE OR REPLACE VIEW commits AS
-  SELECT * FROM read_parquet('segments/*/commits-*.parquet');
+  SELECT * FROM read_parquet('segments/*/commits-*.parquet', union_by_name = true);
 CREATE OR REPLACE VIEW measures AS
-  SELECT * FROM read_parquet('segments/*/measures-*.parquet');
+  SELECT * FROM read_parquet('segments/*/measures-*.parquet', union_by_name = true);
 ```
 
 ## sessions
@@ -122,8 +126,10 @@ LIMIT 40;
 
 ## card_self
 
+`memo` is true for a component in React.memo or a PureComponent, which React skips when its props are equal.
+
 ```sql
-SELECT d.display_name, d.source_file, d.source_line,
+SELECT d.display_name, d.source_file, d.source_line, bool_or(d.memo) AS memo,
        count(*) AS renders,
        count(*) FILTER (e.committed) AS committed,
        round(sum(e.self_us) / 1000.0, 2) AS self_ms,
@@ -199,13 +205,13 @@ LIMIT 10;
 Where one component sits and why it renders, across the session: its definition, and its renders by reason.
 
 ```sql
-SELECT d.display_name, d.source_file, d.source_line, d.owner_path, e.reason_code,
+SELECT d.display_name, d.source_file, d.source_line, d.owner_path, d.memo, e.reason_code,
        count(*) AS renders, count(*) FILTER (e.committed) AS committed,
        round(sum(e.self_us) / 1000.0, 2) AS self_ms
 FROM events e
 JOIN defs d USING (component_id)
 WHERE e.session_id = '<session_id>' AND e.kind = 'render' AND d.display_name = '<name>'
-GROUP BY 1, 2, 3, 4, 5
+GROUP BY 1, 2, 3, 4, 5, 6
 ORDER BY renders DESC
 LIMIT 10;
 ```

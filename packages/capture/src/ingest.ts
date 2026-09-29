@@ -1,6 +1,7 @@
-import { execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 import type { CaptureConfig } from './config.ts';
 import { PageRollup, type RollupOutput, type SegRow } from './rollup.ts';
 import { SegmentWriter } from './segments.ts';
@@ -17,6 +18,7 @@ export interface SessionInfo {
   renderers: object[];
   shim_version: string | null;
   git_sha: string | null;
+  git_dirty: boolean | null;
   config: CaptureConfig;
   page_loads: { page_load_id: number; url: string; token: string; time_origin: number }[];
   refused: { reason: string; detail: string } | null;
@@ -50,12 +52,29 @@ export function newSessionId(now = new Date()): string {
   return `${stamp}-${Math.random().toString(36).slice(2, 6)}`;
 }
 
-function gitSha(): string | null {
-  try {
-    return execFileSync('git', ['rev-parse', 'HEAD'], { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim() || null;
-  } catch {
-    return null;
-  }
+type GitState = { git_sha: string | null; git_dirty: boolean | null };
+let gitAsked: Promise<GitState> | null = null;
+
+// The commit capture runs from, and whether tracked files had changes on top
+// of it, as a fix under test does before it is committed. Asked once per
+// capture and off the event loop: git status can take seconds in a large
+// repository, while capture is holding a new tab's document.
+function gitState(): Promise<GitState> {
+  gitAsked ??= (async () => {
+    const git = async (...args: string[]) => (await promisify(execFile)('git', args, { timeout: 10_000 })).stdout;
+    let sha: string | null;
+    try {
+      sha = (await git('rev-parse', 'HEAD')).trim() || null;
+    } catch {
+      return { git_sha: null, git_dirty: null };
+    }
+    try {
+      return { git_sha: sha, git_dirty: (await git('status', '--porcelain', '--untracked-files=no')).trim() !== '' };
+    } catch {
+      return { git_sha: sha, git_dirty: null };
+    }
+  })();
+  return gitAsked;
 }
 
 // One capture session: one browser target. Turns shim messages into rows,
@@ -97,7 +116,8 @@ export class Session {
       react_version: null,
       renderers: [],
       shim_version: null,
-      git_sha: gitSha(),
+      git_sha: null,
+      git_dirty: null,
       config: opts.config,
       page_loads: [],
       refused: null,
@@ -107,6 +127,12 @@ export class Session {
       measures: 0,
       dropped: 0,
     };
+    const git = gitState().then((g) => {
+      Object.assign(this.info, g);
+      this.save();
+    });
+    this.pending.add(git);
+    void git.finally(() => this.pending.delete(git));
   }
 
   async start(): Promise<void> {
@@ -197,7 +223,7 @@ export class Session {
   }
 
   private def(d: any[]): void {
-    const [id, name, file, line, column, path] = d;
+    const [id, name, file, line, column, path, memo] = d;
     if (typeof name === 'string') this.names.set(id, name);
     if (this.defsSeen.has(id)) return;
     if (this.defsSeen.size >= 200_000) this.defsSeen.clear();
@@ -210,6 +236,7 @@ export class Session {
         source_line: m === null ? line : m.line,
         source_column: m === null ? column : m.column,
         owner_path: path,
+        memo: typeof memo === 'boolean' ? memo : null,
       });
     if (typeof file === 'string' && /^https?:\/\//.test(file) && typeof line === 'number') {
       const hit = this.maps.peek(file, line, column ?? 1);

@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { emptySelect, type Family } from '../../capture/src/schema.ts';
 
 // react-log sessions, top, card and query: read a segments directory with
 // the DuckDB CLI. Every command loads the same views (events, defs, commits,
@@ -10,15 +11,18 @@ const sq = (s: string) => `'${s.replace(/'/g, "''")}'`;
 
 export function viewsSql(dir: string, session?: string): string {
   const root = session === undefined ? `${dir}/*` : `${dir}/${session}`;
-  const files = (family: string) => sq(`${root}/${family}-*.parquet`);
+  // Every pinned column, then the files by name: a session captured before a
+  // column was added reads it as null.
+  const rows = (family: Family) =>
+    `(${emptySelect(family)}) UNION ALL BY NAME SELECT * FROM read_parquet(${sq(`${root}/${family}-*.parquet`)}, union_by_name = true)`;
   return `
-CREATE OR REPLACE VIEW events AS SELECT * FROM read_parquet(${files('seg')});
+CREATE OR REPLACE VIEW events AS ${rows('seg')};
 CREATE OR REPLACE VIEW defs AS
   SELECT component_id, any_value(display_name) AS display_name, any_value(source_file) AS source_file,
-         any_value(source_line) AS source_line, any_value(owner_path) AS owner_path
-  FROM read_parquet(${files('defs')}) GROUP BY component_id;
-CREATE OR REPLACE VIEW commits AS SELECT * FROM read_parquet(${files('commits')});
-CREATE OR REPLACE VIEW measures AS SELECT * FROM read_parquet(${files('measures')});
+         any_value(source_line) AS source_line, any_value(owner_path) AS owner_path, any_value(memo) AS memo
+  FROM (${rows('defs')}) GROUP BY component_id;
+CREATE OR REPLACE VIEW commits AS ${rows('commits')};
+CREATE OR REPLACE VIEW measures AS ${rows('measures')};
 `;
 }
 
@@ -252,7 +256,8 @@ CREATE TEMP TABLE r AS
 SELECT 'header' AS section, * FROM h;
 SELECT 'self' AS section, d.display_name AS name, d.source_file AS file, d.source_line AS line,
        count(*) AS renders, count(*) FILTER (r.committed) AS committed, sum(r.self_us) / 1000.0 AS self_ms,
-       mode(r.reason_code) AS reason, mode(coalesce(r.changed_keys, r.changed_hooks, r.changed_context)) AS changed
+       mode(r.reason_code) AS reason, mode(coalesce(r.changed_keys, r.changed_hooks, r.changed_context)) AS changed,
+       bool_or(d.memo) AS memo
   FROM r LEFT JOIN defs d USING (component_id)
   WHERE r.kind = 'render' AND r.commit_id = ${cid}
   GROUP BY 2, 3, 4 ORDER BY self_ms DESC LIMIT 5;
@@ -304,8 +309,26 @@ SELECT 'commits' AS section, c.commit_id, c.ts, c.total_ms, c.cascade_commit_id,
     out.push('', 'self cost, top 5');
     out.push(
       ...table(
-        [{ title: '  component' }, { title: 'source' }, { title: 'renders', right: true }, { title: 'committed', right: true }, { title: 'self ms', right: true }, { title: 'reason' }, { title: 'changed' }],
-        self.map((s) => [`  ${s.name ?? '?'}`, shortFile(s.file, s.line), int(s.renders), int(s.committed), ms(s.self_ms, 2), s.reason ?? '', s.changed ?? '']),
+        [
+          { title: '  component' },
+          { title: 'source' },
+          { title: 'memo' },
+          { title: 'renders', right: true },
+          { title: 'committed', right: true },
+          { title: 'self ms', right: true },
+          { title: 'reason' },
+          { title: 'changed' },
+        ],
+        self.map((s) => [
+          `  ${s.name ?? '?'}`,
+          shortFile(s.file, s.line),
+          s.memo === true ? 'yes' : s.memo === false ? 'no' : '',
+          int(s.renders),
+          int(s.committed),
+          ms(s.self_ms, 2),
+          s.reason ?? '',
+          s.changed ?? '',
+        ]),
       ),
     );
   }

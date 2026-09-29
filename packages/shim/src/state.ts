@@ -61,9 +61,33 @@ export interface Commit {
   walkMs: number;
   walked: boolean;
   finalized: boolean;
-  // 19.2+: fibers with effect flags, in post-order, to match effect spans by name.
-  effectFibers: Fiber[] | null;
-  effectCursors: { layout: Map<string, number>; passive: Map<string, number> } | null;
+  // 19.2+: the fibers each commit pass visits, in the order React logs their
+  // effect spans (walk.ts); the spans React logged, by phase and component
+  // name ("l|Name", "p|Name"); and the passes' fibers by name, for pairing
+  // spans with fibers (pipeline.ts).
+  passes: EffectPasses | null;
+  spanCounts: Map<string, number> | null;
+  effectIndex: EffectIndex | null;
+}
+
+// Layout cleanups run in the mutation pass and layout effects in the layout
+// pass; passive cleanups in the unmount pass and passive effects in the
+// mount pass.
+export interface EffectPasses {
+  mutation: Fiber[];
+  layout: Fiber[];
+  unmount: Fiber[];
+  mount: Fiber[];
+}
+
+export interface EffectIndex {
+  // By component name: the cleanup pass's fibers, then the effect pass's.
+  layout: Map<string, { cleanup: Fiber[]; create: Fiber[] }>;
+  passive: Map<string, { cleanup: Fiber[]; create: Fiber[] }>;
+  // The one fiber with this name in any pass, or null if there are several.
+  only: Map<string, Fiber | null>;
+  // Spans paired so far, by the spanCounts key.
+  cursor: Map<string, number>;
 }
 
 export interface Stats {
@@ -107,7 +131,8 @@ export interface Shim {
   // Idle pipeline state.
   idByFiber: WeakMap<object, string>;
   idByPath: Map<string, string>;
-  stackOwner: WeakMap<object, string>;
+  // A JSX site's source (siteOf), for elements past React's owner-stack budget.
+  sourceBySite: Map<string, { file: string; line: number; column: number }>;
   defs: unknown[][];
   defBytes: number;
   outbox: string[];
@@ -144,7 +169,7 @@ export function createShim(g: any, config: Config): Shim {
     pendingTriggerAt: 0,
     idByFiber: new WeakMap(),
     idByPath: new Map(),
-    stackOwner: new WeakMap(),
+    sourceBySite: new Map(),
     defs: [],
     defBytes: 0,
     outbox: [],
@@ -189,13 +214,21 @@ export function newCommit(s: Shim, renderer: number): Commit {
     walkMs: 0,
     walked: false,
     finalized: false,
-    effectFibers: null,
-    effectCursors: null,
+    passes: null,
+    spanCounts: null,
+    effectIndex: null,
   };
   s.pendingTrigger = null;
   s.commits.set(c.id, c);
   s.updatesSinceCommit = 0;
   return c;
+}
+
+// One more effect span React logged for a component name in a commit phase.
+export function countSpan(c: Commit, name: string, passive: boolean): void {
+  const key = `${passive ? 'p' : 'l'}|${name}`;
+  const counts = (c.spanCounts ??= new Map());
+  counts.set(key, (counts.get(key) ?? 0) + 1);
 }
 
 // The trusted event being dispatched right now, if any. React's scheduler

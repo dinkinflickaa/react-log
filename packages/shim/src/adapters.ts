@@ -2,7 +2,7 @@ import { laneClassIndex, laneClassOf } from './constants.ts';
 import { K_EFFECT_SPAN, K_LAYOUT_EFFECT, K_PASSIVE_EFFECT, K_SUSPEND, K_UPDATE, K_YIELD } from './ring.ts';
 import { recordEntry } from './observer.ts';
 import { captureStack } from './stack.ts';
-import { currentEvent, type Fiber, newCommit, now, type Renderer, type Shim } from './state.ts';
+import { countSpan, currentEvent, type Fiber, newCommit, now, type Renderer, type Shim } from './state.ts';
 import { settlePassive } from './walk.ts';
 
 export const EFFECT_UNMOUNT = 1;
@@ -281,8 +281,10 @@ function onTimeStamp(s: Shim, label: string, start: number, end: number, track: 
     if (s.pendingPassive !== null) {
       bits |= SPAN_PASSIVE;
       ring.commit[i] = s.pendingPassive.id;
+      countSpan(s.pendingPassive, label, true);
     } else if (s.open !== null) {
       ring.commit[i] = s.open.id;
+      countSpan(s.open, label, false);
     } else {
       s.unassignedSpans.push(i);
     }

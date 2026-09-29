@@ -40,9 +40,14 @@ export const UPDATE = 4;
 export const CHILD_DELETION = 16;
 export const CONTENT_RESET = 32;
 export const CALLBACK = 64;
+export const REF = 512;
 export const PASSIVE = 2048;
 export const HYDRATING = 4096;
 export const VISIBILITY = 8192;
+// Kept across renders: the fiber has layout effects (or componentDidMount),
+// or passive effects.
+export const LAYOUT_STATIC = 4194304;
+export const PASSIVE_STATIC = 8388608;
 
 export const STRICT_LEGACY_MODE = 8;
 
@@ -54,8 +59,10 @@ export const HOST_COMPONENT = 5;
 export const HOST_TEXT = 6;
 export const CONTEXT_CONSUMER = 9;
 export const FORWARD_REF = 11;
+export const MEMO_COMPONENT = 14;
 export const SIMPLE_MEMO_COMPONENT = 15;
 export const INCOMPLETE_CLASS_COMPONENT = 17;
+export const OFFSCREEN_COMPONENT = 22;
 export const HOST_HOISTABLE = 26;
 export const HOST_SINGLETON = 27;
 export const INCOMPLETE_FUNCTION_COMPONENT = 28;

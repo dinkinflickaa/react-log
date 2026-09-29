@@ -52,6 +52,8 @@ describe(`shim under jsdom, React ${process.env.REACT_VERSION}`, () => {
     for (const name of TREE) expect(byName.has(name), name).toBe(true);
     expect(byName.get('Header')![5]).toBe('App>Layout>Header');
     expect(byName.get('Counter')![5]).toBe('App>Layout>Main>Counter');
+    // React.memo: Details only.
+    for (const [name, d] of byName) expect(d[6], name).toBe(name === 'Details');
   });
 
   test('increment: reasons, committed and changed hooks', async () => {
