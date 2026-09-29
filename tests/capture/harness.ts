@@ -151,7 +151,8 @@ export async function withCapture(
       if (page === undefined) await sleep(50);
     }
     targetId = page.targetId;
-    await drive(cdp, await attachTab(cdp, page.targetId, url.includes('/lab.html') ? 'lab' : url.includes('/frames.html') ? 'other' : 'chains'));
+    const kind = url.includes('/lab.html') ? 'lab' : url.includes('/chains.html') ? 'chains' : 'other';
+    await drive(cdp, await attachTab(cdp, page.targetId, kind));
     // Binding calls reach capture on its own connection; give the last ones a moment.
     await sleep(500);
   } catch (e) {

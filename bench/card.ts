@@ -78,7 +78,7 @@ function generate(dir: string, duckdb: string): void {
            'click' AS trigger_event, 'Blocking' AS lane, 101.76 + (n % 13) AS total_ms, 99.76 AS render_ms, 2.0 + (n % 13) AS layout_ms, 0.0 AS passive_ms,
            TRUE AS passive_sync, FALSE AS strict_mode, NULL::VARCHAR AS cascade_commit_id, ${PER_COMMIT - 5}::INTEGER AS rendered, 250::INTEGER AS committed,
            ${PER_COMMIT - 255}::INTEGER AS noop, 70.0 AS noop_ms, 400::INTEGER AS distinct_types, 'Component7' AS top_type, 12::INTEGER AS top_type_count,
-           'c00001' AS top1_component_id, 0.02 AS top1_share, 0.69 AS noop_share, 0.01 AS effect_share
+           'c00001' AS top1_component_id, 0.02 AS top1_share, 0.69 AS noop_share, 0.01 AS effect_share, 0::INTEGER AS dropped_rows
     FROM range(1, ${COMMITS + 1}) t(n)`)}) TO '${join(dir, 'commits-00000.parquet')}' (FORMAT parquet, COMPRESSION zstd);`);
   sql.push(`COPY (${pinned('measures', `
     SELECT '${SESSION}.1.m' || k AS measure_instance_id, '${SESSION}' AS session_id, 1::INTEGER AS page_load_id, 'click' AS name, 'event_timing' AS source,
@@ -109,6 +109,7 @@ function generate(dir: string, duckdb: string): void {
         commits: COMMITS,
         measures: COMMITS / 4,
         dropped: 0,
+        buffer_peak: 0,
       },
       null,
       2,

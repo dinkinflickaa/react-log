@@ -245,7 +245,7 @@ export async function capture(opts: CaptureOptions): Promise<CaptureResult> {
   const closeSession = async (s: Session) => {
     await s.close();
     done.push(s);
-    log(`react-log: session ${s.id}: ${s.info.rows} rows, ${s.writer.filesWritten} files, ${s.info.dropped} dropped`);
+    log(`react-log: session ${s.id}: ${s.info.rows} rows, ${s.writer.filesWritten} files, ${s.info.dropped} dropped, page buffer peak ${s.info.buffer_peak} records`);
   };
 
   const setup = async (a: Attached, waiting: boolean) => {

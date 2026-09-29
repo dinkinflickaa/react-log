@@ -19,7 +19,7 @@ import { classifyKeys, whyRendered } from './why.ts';
 
 // Wire format, one JSON message per sink call:
 //   {t:"hello"|"renderer"|"refused"|"error", ...}
-//   {t:"batch", seq, dropped, defs, rows}
+//   {t:"batch", seq, dropped, peak, defs, rows}
 // defs: [component_id, display_name, source_file, source_line, source_column, owner_path, memo]
 // rows: [kind, ts, dur_us, self_us, lane, component_id, commit, reason_code,
 //        changed_hooks, changed_context, changed_keys, committed, call_site, extra]
@@ -30,27 +30,50 @@ export function post(s: Shim, message: object): void {
   scheduleIdle(s);
 }
 
+// Rows waiting beyond which the page's idle time is not enough: a busy page
+// (a load, an animation) runs idle callbacks only on their timeout.
+const BACKLOG = 2000;
+
 export function scheduleIdle(s: Shim): void {
   if (s.idleScheduled) return;
   s.idleScheduled = true;
   const ric = s.g.requestIdleCallback;
-  if (typeof ric === 'function') ric.call(s.g, (d: IdleDeadline) => runIdle(s, d), { timeout: 1000 });
+  // With a backlog, a slice at least every 100 ms: at most 4% of a busy
+  // main thread.
+  const timeout = s.ring.count > BACKLOG ? 100 : 1000;
+  if (typeof ric === 'function') ric.call(s.g, (d: IdleDeadline) => runIdle(s, d), { timeout });
   else setTimeout(() => runIdle(s, null), 1);
 }
+
+// With a backlog on an idle page, a slice takes up to a frame's worth of the
+// idle period: Chrome runs one idle callback per period of up to 50 ms.
+const BACKLOG_SLICE_MS = 16;
 
 function runIdle(s: Shim, deadline: IdleDeadline | null): void {
   s.idleScheduled = false;
   const t0 = now();
-  let budget = s.config.sliceMs;
-  // Fired on its timeout the callback has no idle time left, which is how a
-  // busy or background page runs it (background tabs about once a second):
-  // take the full slice then, or a hidden tab could not keep up.
-  if (deadline !== null && !deadline.didTimeout) budget = Math.min(budget, Math.max(1, deadline.timeRemaining()));
+  const scheduling = s.g.navigator?.scheduling;
+  const inputPending = typeof scheduling?.isInputPending === 'function' ? () => scheduling.isInputPending() === true : () => false;
+  let until: number;
+  if (deadline !== null && !deadline.didTimeout && s.ring.count > BACKLOG) {
+    // Until 2 ms before the idle period ends, and no longer than a frame;
+    // input stops it after the current payload.
+    until = t0 + Math.max(1, Math.min(BACKLOG_SLICE_MS, deadline.timeRemaining() - 2));
+  } else {
+    // Fired on its timeout the callback has no idle time left, which is how a
+    // busy or background page runs it (background tabs about once a second):
+    // take the full slice then, or a hidden tab could not keep up.
+    let budget = s.config.sliceMs;
+    if (deadline !== null && !deadline.didTimeout) budget = Math.min(budget, Math.max(1, deadline.timeRemaining()));
+    // Payloads until 60% of the budget is spent. The rest is headroom for the
+    // last payload's sink call (about 0.35 ms for 24 KB) and for a GC or a
+    // preemption that lands in the slice.
+    until = t0 + budget * 0.6;
+  }
   try {
-    // Serialize for 30% of the budget. The rest is headroom for the sink call
-    // (about 0.35 ms for a full payload) and for a GC or a preemption that
-    // lands in the slice.
-    drain(s, t0 + budget * 0.3);
+    do drain(s, until);
+    while (s.ring.count > 0 && now() < until && typeof s.g.__reactLogSink === 'function' && !inputPending());
+    s.ring.settle();
   } catch (e) {
     report(s, e);
   }
@@ -72,6 +95,7 @@ export function flushNow(s: Shim): void {
     }
   } while (s.ring.count > 0);
   drain(s, Infinity);
+  s.ring.settle();
 }
 
 function drain(s: Shim, until: number): void {
@@ -108,7 +132,9 @@ function drain(s: Shim, until: number): void {
     while (s.outbox.length > 0) sink(s.outbox.shift());
     return;
   }
-  const message = `{"t":"batch","seq":${s.seq++},"dropped":${dropped},"defs":${JSON.stringify(s.defs)},"rows":[${rows.join(',')}]}`;
+  // peak: the most records the page held at once, a measure of how far
+  // capture fell behind.
+  const message = `{"t":"batch","seq":${s.seq++},"dropped":${dropped},"peak":${ring.peak},"defs":${JSON.stringify(s.defs)},"rows":[${rows.join(',')}]}`;
   s.lastDropped = ring.dropped;
   s.defs = [];
   s.defBytes = 0;
@@ -267,6 +293,7 @@ function commitRow(c: Commit): unknown[] {
       rendered: c.rendered,
       bailouts: c.bailouts,
       walkUs: us(c.walkMs),
+      dropped: c.dropped,
     },
   ];
 }

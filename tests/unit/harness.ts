@@ -1,4 +1,5 @@
 import { install, type ShimApi } from '../../packages/shim/src/install.ts';
+import type { Config } from '../../packages/shim/src/state.ts';
 
 export type Row = [
   kind: string,
@@ -30,12 +31,12 @@ export interface Harness {
 // Installs the shim on the jsdom global before React loads, then renders the
 // fixture app with the React version this vitest project aliases. `before`
 // runs between the two, with the shim's hook in place.
-export async function start(opts: { before?: (g: any) => void } = {}): Promise<Harness> {
+export async function start(opts: { before?: (g: any) => void; config?: Partial<Config> } = {}): Promise<Harness> {
   const g = globalThis as any;
   const messages: any[] = [];
   g.__reactLogSink = (json: string) => messages.push(JSON.parse(json));
   g.IS_REACT_ACT_ENVIRONMENT = true;
-  const api = install(g, { flushIntervalMs: 3_600_000 });
+  const api = install(g, { flushIntervalMs: 3_600_000, ...opts.config });
   opts.before?.(g);
 
   const React = (await import('react')).default as any;

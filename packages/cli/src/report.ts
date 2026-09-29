@@ -301,6 +301,9 @@ SELECT 'commits' AS section, c.commit_id, c.ts, c.total_ms, c.cascade_commit_id,
     `extent ${int(h.rendered)} rendered, ${int(h.committed)} committed, ${int(h.noop)} no-op (${ms(h.noop_ms)} ms), ${int(h.distinct_types)} types${h.top_type ? `, top type ${h.top_type} x${int(h.top_type_count)}` : ''}`,
   );
   out.push(`shares top1 ${share(h.top1_share)}${h.top1_name ? ` (${h.top1_name})` : ''}, no-op ${share(h.noop_share)}, effects ${share(h.effect_share)}`);
+  if (Number(h.dropped_rows ?? 0) > 0) {
+    out.push(`incomplete: the page had no room for ${int(h.dropped_rows)} of this commit's rows; its counts and times undercount`);
+  }
   const reasons = data.get('reasons') ?? [];
   if (reasons.length > 0) out.push(`why ${reasons.map((r) => `${r.reason} ${int(r.n)}`).join(', ')}`);
 

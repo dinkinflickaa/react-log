@@ -53,9 +53,11 @@ export function onCommit(s: Shim, r: Renderer, root: any, priority: number | und
   walk(s, r, root.current, c);
 
   const spans = s.unassignedSpans;
-  for (let i = 0; i < spans.length; i++) {
-    s.ring.commit[spans[i]!] = c.id;
-    countSpan(c, s.ring.r0[spans[i]!] as string, false);
+  for (let k = 0; k < spans.length; k++) {
+    const i = spans[k]!;
+    if (i < 0) continue;
+    s.ring.commit[i] = c.id;
+    countSpan(c, s.ring.r0[i] as string, false);
   }
   spans.length = 0;
 
@@ -264,7 +266,10 @@ export function onUnmount(s: Shim, fiber: Fiber): void {
 function recordRender(s: Shim, c: Commit, fiber: Fiber, alt: Fiber): number {
   const ring = s.ring;
   const i = ring.alloc(K_RENDER);
-  if (i < 0) return -1;
+  if (i < 0) {
+    c.dropped++;
+    return -1;
+  }
   const start: number = fiber.actualStartTime;
   const dur: number = fiber.actualDuration;
   let self = dur;

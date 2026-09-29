@@ -81,8 +81,13 @@ export function sourceOf(s: Shim, fiber: Fiber, path: string): Source | null {
   const err = fiber._debugStack;
   if (err == null || typeof err !== 'object') return null;
   const site = siteOf(path);
-  const frames = parseFrames(String((err as Error).stack ?? ''));
-  if (frames.length === 0 || !ELEMENT_FACTORY.test(frames[0]!.fn)) return s.sourceBySite.get(site) ?? null;
+  if (s.placeholders.has(err)) return s.sourceBySite.get(site) ?? null;
+  // Only as far as the first frame past the element factory.
+  const frames = parseFrames(String((err as Error).stack ?? ''), (f) => !ELEMENT_FACTORY.test(f.fn));
+  if (frames.length === 0 || !ELEMENT_FACTORY.test(frames[0]!.fn)) {
+    s.placeholders.add(err);
+    return s.sourceBySite.get(site) ?? null;
+  }
   for (const f of frames) {
     if (ELEMENT_FACTORY.test(f.fn)) continue;
     if (f.file === '') return null;

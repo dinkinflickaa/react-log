@@ -48,8 +48,9 @@ export function profilingHooks(s: Shim, r: Renderer): Record<string, (...args: a
   const stopEffect = () => {
     if (effFiber === null) return;
     const i = ring.alloc(effKind);
+    const c = effKind === K_PASSIVE_EFFECT ? (s.pendingPassive ?? s.lastCommitted) : (s.open ?? s.lastCommitted);
+    if (i < 0 && c !== null) c.dropped++;
     if (i >= 0) {
-      const c = effKind === K_PASSIVE_EFFECT ? (s.pendingPassive ?? s.lastCommitted) : (s.open ?? s.lastCommitted);
       ring.commit[i] = c === null ? 0 : c.id;
       ring.t0[i] = effStart;
       ring.t1[i] = now() - effStart;
@@ -273,7 +274,11 @@ function onTimeStamp(s: Shim, label: string, start: number, end: number, track: 
     // tertiary colors and are skipped: the commit walk has them.
     const ring = s.ring;
     const i = ring.alloc(K_EFFECT_SPAN);
-    if (i < 0) return;
+    if (i < 0) {
+      const c = s.pendingPassive ?? s.open;
+      if (c !== null) c.dropped++;
+      return;
+    }
     ring.t0[i] = start;
     ring.t1[i] = end - start;
     ring.r0[i] = label;

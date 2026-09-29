@@ -10,12 +10,15 @@ export interface Frame {
   text: string;
 }
 
-// V8 frames: "    at fn (file:line:col)" or "    at file:line:col".
-export function parseFrames(stack: string): Frame[] {
+// V8 frames: "    at fn (file:line:col)" or "    at file:line:col". With
+// `stop`, parsing ends at the first frame it accepts.
+export function parseFrames(stack: string, stop?: (f: Frame) => boolean): Frame[] {
   const out: Frame[] = [];
-  const lines = stack.split('\n');
-  for (let i = 0; i < lines.length; i++) {
-    const text = lines[i]!.trim();
+  for (let start = 0; start < stack.length; ) {
+    let end = stack.indexOf('\n', start);
+    if (end < 0) end = stack.length;
+    const text = stack.slice(start, end).trim();
+    start = end + 1;
     if (!text.startsWith('at ')) continue;
     const body = text.slice(3);
     const open = body.lastIndexOf(' (');
@@ -29,11 +32,9 @@ export function parseFrames(stack: string): Frame[] {
     if (bracket >= 0) fn = fn.slice(0, bracket);
     if (fn.startsWith('async ')) fn = fn.slice(6);
     const m = /^(.*):(\d+):(\d+)$/.exec(loc);
-    out.push(
-      m === null
-        ? { fn, file: '', line: 0, column: 0, text: body }
-        : { fn, file: m[1]!, line: Number(m[2]), column: Number(m[3]), text: body },
-    );
+    const frame = m === null ? { fn, file: '', line: 0, column: 0, text: body } : { fn, file: m[1]!, line: Number(m[2]), column: Number(m[3]), text: body };
+    out.push(frame);
+    if (stop?.(frame)) break;
   }
   return out;
 }

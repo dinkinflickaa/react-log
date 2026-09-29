@@ -27,6 +27,8 @@ export interface SessionInfo {
   commits: number;
   measures: number;
   dropped: number;
+  // The most records a page of the session held before capture took them.
+  buffer_peak: number;
 }
 
 interface PageLoad {
@@ -126,6 +128,7 @@ export class Session {
       commits: 0,
       measures: 0,
       dropped: 0,
+      buffer_peak: 0,
     };
     const git = gitState().then((g) => {
       Object.assign(this.info, g);
@@ -182,6 +185,7 @@ export class Session {
         }
         for (const d of msg.defs) this.def(d);
         for (const r of msg.rows) this.event(page, r);
+        if (typeof msg.peak === 'number' && msg.peak > this.info.buffer_peak) this.info.buffer_peak = msg.peak;
         if (msg.dropped > 0) {
           this.info.dropped += msg.dropped;
           this.enqueue(page, this.row(page, { kind: 'dropped', ts: Math.round(Date.now() * 1000), extra: { count: msg.dropped } }), null);

@@ -65,6 +65,7 @@ export const SCHEMAS: Record<Family, [name: string, type: string][]> = {
     ['top1_share', 'DOUBLE'],
     ['noop_share', 'DOUBLE'],
     ['effect_share', 'DOUBLE'],
+    ['dropped_rows', 'INTEGER'],
   ],
   measures: [
     ['measure_instance_id', 'VARCHAR'],

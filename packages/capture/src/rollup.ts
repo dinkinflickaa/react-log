@@ -59,6 +59,8 @@ export interface CommitRow {
   top1_share: number | null;
   noop_share: number | null;
   effect_share: number | null;
+  // Records of this commit the page had no room for: its numbers undercount.
+  dropped_rows: number;
 }
 
 export interface MeasureRow {
@@ -576,6 +578,7 @@ export class PageRollup {
       top1_share: share(top1Us),
       noop_share: share(a.noopSelfUs),
       effect_share: share(a.effectUs),
+      dropped_rows: typeof x.dropped === 'number' ? x.dropped : 0,
     };
   }
 

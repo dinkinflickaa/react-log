@@ -6,7 +6,9 @@ import { Ring } from './ring.ts';
 export type Fiber = any;
 
 export interface Config {
+  // Records the ring starts with, and the most it grows to before it drops.
   ringSize: number;
+  ringMax: number;
   flushIntervalMs: number;
   sliceMs: number;
   stacksPerBatch: number;
@@ -18,6 +20,7 @@ export interface Config {
 
 export const DEFAULT_CONFIG: Config = {
   ringSize: 50_000,
+  ringMax: 1_000_000,
   flushIntervalMs: 250,
   sliceMs: 4,
   stacksPerBatch: 8,
@@ -68,6 +71,8 @@ export interface Commit {
   passes: EffectPasses | null;
   spanCounts: Map<string, number> | null;
   effectIndex: EffectIndex | null;
+  // This commit's records the ring had no room for.
+  dropped: number;
 }
 
 // Layout cleanups run in the mutation pass and layout effects in the layout
@@ -131,8 +136,10 @@ export interface Shim {
   // Idle pipeline state.
   idByFiber: WeakMap<object, string>;
   idByPath: Map<string, string>;
-  // A JSX site's source (siteOf), for elements past React's owner-stack budget.
+  // A JSX site's source (siteOf), for elements past React's owner-stack budget,
+  // and the placeholder Errors those elements share, once seen.
   sourceBySite: Map<string, { file: string; line: number; column: number }>;
+  placeholders: WeakSet<object>;
   defs: unknown[][];
   defBytes: number;
   outbox: string[];
@@ -147,10 +154,10 @@ export interface Shim {
 }
 
 export function createShim(g: any, config: Config): Shim {
-  return {
+  const s: Shim = {
     g,
     config,
-    ring: new Ring(config.ringSize),
+    ring: new Ring(config.ringSize, config.ringMax),
     stats: { commits: 0, walkMs: 0, maxWalkMs: 0, maxTaskMs: 0, maxIdleMs: 0, maxObserverMs: 0, maxSinkMs: 0, maxBatchBytes: 0, batches: 0, rows: 0 },
     renderers: new Map(),
     tracksRenderer: null,
@@ -170,6 +177,7 @@ export function createShim(g: any, config: Config): Shim {
     idByFiber: new WeakMap(),
     idByPath: new Map(),
     sourceBySite: new Map(),
+    placeholders: new WeakSet(),
     defs: [],
     defBytes: 0,
     outbox: [],
@@ -181,6 +189,9 @@ export function createShim(g: any, config: Config): Shim {
     acc: new Uint8Array(4096),
     slots: new Int32Array(4096),
   };
+  // The ring moves records at times; these hold indices across writes.
+  s.ring.holders.push(s.slots, s.unassignedSpans);
+  return s;
 }
 
 export function newCommit(s: Shim, renderer: number): Commit {
@@ -215,6 +226,7 @@ export function newCommit(s: Shim, renderer: number): Commit {
     walked: false,
     finalized: false,
     passes: null,
+    dropped: 0,
     spanCounts: null,
     effectIndex: null,
   };

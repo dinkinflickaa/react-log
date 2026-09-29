@@ -9,7 +9,7 @@ const version = process.env.REACT_VERSION!;
 const [major, minor] = version.split('.').map(Number) as [number, number];
 const ownerStacks = major > 19 || (major === 19 && minor >= 1);
 
-const shim = () => ({ sourceBySite: new Map() }) as any;
+const shim = () => ({ sourceBySite: new Map(), placeholders: new WeakSet() }) as any;
 const stack = (...frames: string[]) => ({ stack: ['Error: react-stack-top-frame', ...frames.map((f) => `    at ${f}`)].join('\n') });
 
 describe('sourceOf', () => {
