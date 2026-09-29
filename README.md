@@ -8,34 +8,48 @@ A React render event log captured over CDP and written to Parquet, plus a Claude
 - The DuckDB CLI 1.5.5 on PATH. On Linux or macOS, run `scripts/install-duckdb.sh`. Otherwise see https://duckdb.org/docs/installation.
 - Chrome or Chromium, for capture and the browser tests. Set `CHROME_PATH` if it isn't found.
 
-## Setup
+## Try it
+
+Once:
 
 ```sh
+git clone https://github.com/dinkinflickaa/react-log.git && cd react-log
 pnpm install
-pnpm fixture:build        # one dev bundle of the demo app per React version
-pnpm fixture:serve        # http://localhost:3000, cross-origin isolated
-pnpm test
-pnpm exec react-log --help
-```
-
-## Try it on your app
-
-The app must run a React 18 or 19 development build. Once, from this repository:
-
-```sh
 (cd packages/cli && npm link)                                         # react-log on your PATH
 mkdir -p ~/.claude/skills && ln -s "$PWD/skills/react-log" ~/.claude/skills/react-log   # the skill, for Claude Code in any project
 ```
 
-Then in your app's directory, with its dev server running:
+### On the demo app
+
+```sh
+pnpm fixture:build && pnpm fixture:serve                              # the lab on http://localhost:3000; leave it running
+react-log capture --launch http://localhost:3000/react-19.3.0/lab.html   # in a second terminal: click the lab's buttons, a second apart, then Ctrl-C
+react-log top                                                         # the most expensive commits of the newest session
+react-log card <commit_id>                                            # one commit explained
+```
+
+Then, in Claude Code in this repository, ask for the react-log skill on the newest session. The lab's bugs are planted on purpose; the header of `fixture/app/src/lab/Lab.jsx` lists them and the verdict each should get.
+
+### On your app
+
+The app must run a React 18 or 19 development build. In its directory, with its dev server running:
 
 ```sh
 react-log capture --launch http://localhost:5173/   # a new Chrome window: do the slow interaction 10 to 20 times, a second apart, then Ctrl-C
-react-log top                                       # the most expensive commits of the newest session
-react-log card <commit_id>                          # one commit explained
+react-log top
+react-log card <commit_id>
 ```
 
-Capture writes `./segments/` there; add it to `.gitignore`. Then, in Claude Code in the same directory, ask for the react-log skill on the newest session: it explains the worst commits and either patches the code or says why not, so start on a branch.
+The Chrome window uses its own profile (`~/.react-log/profile`), so log in to your app there the first time. Capture writes `./segments/` in the app's directory; add it to `.gitignore`. Then, in Claude Code in the same directory, ask for the react-log skill on the newest session: it explains the worst commits and either patches the code or says why not, so start on a branch.
+
+## Development
+
+```sh
+pnpm fixture:build        # one dev bundle of the demo app per React version
+pnpm fixture:serve        # http://localhost:3000, cross-origin isolated
+pnpm test                 # every suite, on every React version (about a minute)
+pnpm exec react-log --help
+```
 
 ## Capture
 
