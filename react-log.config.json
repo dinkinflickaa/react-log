@@ -1,6 +1,6 @@
 {
   "cdp": "http://localhost:9222",
-  "urlMatch": "localhost:3000",
+  "urlMatch": "",
   "launch": { "chromePath": null, "userDataDir": "~/.react-log/profile", "isolate": false },
   "interactions": { "eventTiming": true },
   "measures": [{ "name": "route_switch", "start": "route_switch:start", "end": "route_switch:end" }],

@@ -20,7 +20,8 @@ export interface CaptureConfig {
 
 export const DEFAULTS: CaptureConfig = {
   cdp: 'http://localhost:9222',
-  urlMatch: 'localhost:3000',
+  // Empty: every tab and iframe running a development React is recorded.
+  urlMatch: '',
   launch: { chromePath: null, userDataDir: '~/.react-log/profile', isolate: false },
   interactions: { eventTiming: true },
   measures: [],

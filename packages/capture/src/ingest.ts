@@ -163,7 +163,7 @@ export class Session {
       }
       case 'renderer':
         this.info.renderers.push(msg);
-        this.info.react_version ??= msg.version;
+        if (msg.skipped == null) this.info.react_version ??= msg.version;
         this.save();
         return;
       case 'refused':

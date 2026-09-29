@@ -55,17 +55,52 @@ interface Attached {
   url: string;
   recordAll: boolean;
   session: Session | null;
-  // Execution contexts whose hello was for a URL that does not match.
-  ignored: Set<number>;
+  // Execution contexts (documents) that said hello, or null for one whose URL
+  // does not match --url-match.
+  contexts: Map<number, PageContext | null>;
   // Settles when the shim and the binding are in place.
   ready: Promise<void>;
 }
+
+interface PageContext {
+  url: string;
+  // A document is recorded from its first development React on. Until then
+  // its hello and any skipped Reacts wait here; null once it records.
+  held: string[] | null;
+}
+
+const attachedTo = (sessionId: string, targetId: string, url: string, recordAll: boolean): Attached => ({
+  sessionId,
+  targetId,
+  url,
+  recordAll,
+  session: null,
+  contexts: new Map(),
+  ready: Promise.resolve(),
+});
+
+// Whether a page already runs React, and which build: React keeps each DOM
+// node's fiber in an expando property, and only development fibers have
+// _debugOwner.
+const DETECT_REACT = `(() => {
+  const all = document.getElementsByTagName('*');
+  for (let i = 0; i < all.length && i < 5000; i++) {
+    for (const k of Object.keys(all[i])) {
+      if (k.startsWith('__reactFiber$') || k.startsWith('__reactContainer$') || k.startsWith('__reactInternalInstance$')) {
+        const f = all[i][k];
+        return f !== null && typeof f === 'object' && '_debugOwner' in f ? 'development' : 'production';
+      }
+    }
+  }
+  return 'none';
+})()`;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 export async function capture(opts: CaptureOptions): Promise<CaptureResult> {
   const log = opts.log ?? ((line: string) => process.stderr.write(`${line}\n`));
   const config = opts.config;
+  // Empty: every document with a development React is recorded.
   const urlMatch = opts.urlMatch ?? config.urlMatch;
   const segmentsDir = resolve(opts.segments ?? config.segments.dir);
   const duckdb = duckdbPath(opts.duckdb);
@@ -97,14 +132,10 @@ export async function capture(opts: CaptureOptions): Promise<CaptureResult> {
     stop = r;
   });
 
-  // Synchronous, so messages that follow the hello are never lost while the
-  // session's first files are written.
+  // Synchronous, so messages that follow the first React are never lost while
+  // the session's first files are written.
   const openSession = (a: Attached, url: string): Session => {
     const s = new Session({ root: segmentsDir, targetId: a.targetId, url, config, duckdb, maps });
-    s.onRefused = (reason, detail) => {
-      fatal = new Error(`the shim refused this page (${reason}): ${detail}`);
-      stop();
-    };
     s.onError = (m) => log(`react-log: ${s.id}: ${m}`);
     a.session = s;
     s.start().catch((err) => log(`react-log: ${s.id}: ${err.message}`));
@@ -112,50 +143,80 @@ export async function capture(opts: CaptureOptions): Promise<CaptureResult> {
     return s;
   };
 
+  // One target's messages. A target's session starts with the first document
+  // that registers a development React; a document that never does (no
+  // React, or only production ones) records nothing and stops nothing.
+  const onMessage = (a: Attached, context: number, payload: string) => {
+    if (payload.startsWith('{"t":"hello"')) {
+      const url = JSON.parse(payload).url as string;
+      const recorded = a.recordAll || urlMatch === '' || url.includes(urlMatch);
+      a.contexts.set(context, recorded ? { url, held: [payload] } : null);
+      return;
+    }
+    const page = a.contexts.get(context);
+    if (page == null) return;
+    const msg = payload.startsWith('{"t":"renderer"') || payload.startsWith('{"t":"refused"') || payload.startsWith('{"t":"error"') ? JSON.parse(payload) : null;
+    if (msg?.t === 'renderer' && msg.skipped != null) {
+      log(`react-log: ${page.url}: React ${msg.version} ${msg.skipped === 'not-a-dev-build' ? 'is a production build' : 'is not supported'}; not recorded`);
+    }
+    if (page.held === null) {
+      a.session!.handle(context, payload);
+      return;
+    }
+    if (msg?.t === 'renderer' && msg.skipped == null) {
+      const session = a.session ?? openSession(a, page.url);
+      for (const held of page.held) session.handle(context, held);
+      page.held = null;
+      session.handle(context, payload);
+    } else if (msg?.t === 'renderer') {
+      page.held.push(payload);
+    } else if (msg?.t === 'refused') {
+      log(`react-log: ${page.url}: ${msg.detail}; not recorded`);
+    } else if (msg?.t === 'error') {
+      log(`react-log: ${page.url}: shim: ${msg.message}`);
+    }
+    // Batches before a development React hold no React rows.
+  };
+
+  // A tab, or an iframe from another site (its own target). Auto-attach
+  // reports new ones paused, before any of their scripts run; ones that
+  // existed before capture attached are not paused.
+  const instrument = (info: { targetId: string; type: string; url: string }, sid: string, waiting: boolean) => {
+    if (info.type !== 'page' && info.type !== 'iframe') {
+      if (waiting) void cdp.send('Runtime.runIfWaitingForDebugger', {}, sid).catch(() => {});
+      return;
+    }
+    if (attached.has(sid)) return;
+    const a = attachedTo(sid, info.targetId, info.url, false);
+    attached.set(sid, a);
+    a.ready = setup(a, waiting).catch((err) => log(`react-log: cannot instrument ${info.url}: ${err.message}`));
+  };
+
   const onEvent = (e: CdpEvent) => {
     const a = e.sessionId === undefined ? undefined : attached.get(e.sessionId);
     if (e.method === 'Runtime.bindingCalled' && a !== undefined && e.params.name === '__reactLogSink') {
-      const payload: string = e.params.payload;
-      const context: number = e.params.executionContextId;
-      if (payload.startsWith('{"t":"hello"')) {
-        // Record documents from matching URLs only (any URL in launch mode).
-        // The session starts at the first one.
-        const url = JSON.parse(payload).url as string;
-        if (!a.recordAll && !url.includes(urlMatch)) {
-          a.ignored.add(context);
-          return;
-        }
-        (a.session ?? openSession(a, url)).handle(context, payload);
-        return;
-      }
-      if (a.session !== null && !a.ignored.has(context)) a.session.handle(context, payload);
+      onMessage(a, e.params.executionContextId, e.params.payload);
       return;
     }
     if (e.method === 'Fetch.requestPaused' && a !== undefined) {
       void isolateResponse(cdp, e.sessionId!, e.params);
       return;
     }
-    if (e.method === 'Target.attachedToTarget' && e.sessionId === undefined) {
-      // Auto-attach reports new targets paused. Explicit attaches (and targets
-      // that existed before auto-attach) are not paused and are handled where
-      // they are made.
-      if (e.params.waitingForDebugger !== true) return;
-      const info = e.params.targetInfo;
-      const sid: string = e.params.sessionId;
-      if (info.type !== 'page') {
-        void cdp.send('Runtime.runIfWaitingForDebugger', {}, sid).catch(() => {});
-        return;
-      }
-      const a: Attached = { sessionId: sid, targetId: info.targetId, url: info.url, recordAll: false, session: null, ignored: new Set(), ready: Promise.resolve() };
-      attached.set(sid, a);
-      a.ready = setup(a, true).catch((err) => log(`react-log: cannot instrument ${info.url}: ${err.message}`));
+    if (e.method === 'Target.attachedToTarget') {
+      // From the browser: new tabs, paused. Tabs that existed before are
+      // attached explicitly below. From a tab or iframe: its iframes from
+      // other sites, paused when new.
+      const waiting = e.params.waitingForDebugger === true;
+      if (e.sessionId === undefined && !waiting) return;
+      if (e.sessionId !== undefined && a === undefined) return;
+      instrument(e.params.targetInfo, e.params.sessionId, waiting);
       return;
     }
     if (e.method === 'Fetch.requestPaused' && e.sessionId === undefined) {
       void holdDocument(e.params);
       return;
     }
-    if (e.method === 'Target.detachedFromTarget' && e.sessionId === undefined) {
+    if (e.method === 'Target.detachedFromTarget') {
       const a0 = attached.get(e.params.sessionId);
       if (a0 === undefined) return;
       attached.delete(a0.sessionId);
@@ -207,6 +268,9 @@ export async function capture(opts: CaptureOptions): Promise<CaptureResult> {
     if (isolate) {
       await cdp.send('Fetch.enable', { patterns: [{ urlPattern: '*', resourceType: 'Document', requestStage: 'Response' }] }, sid);
     }
+    // Iframes from other sites are targets of their own, attached through
+    // their parent and paused until instrumented.
+    await cdp.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, sid).catch(() => {});
     if (waiting) await cdp.send('Runtime.runIfWaitingForDebugger', {}, sid);
   };
 
@@ -230,23 +294,38 @@ export async function capture(opts: CaptureOptions): Promise<CaptureResult> {
     if (opts.launch !== undefined) {
       const { targetId } = await cdp.send<{ targetId: string }>('Target.createTarget', { url: 'about:blank' });
       const { sessionId } = await cdp.send<{ sessionId: string }>('Target.attachToTarget', { targetId, flatten: true });
-      const a: Attached = { sessionId, targetId, url: opts.launch, recordAll: true, session: null, ignored: new Set(), ready: Promise.resolve() };
+      const a = attachedTo(sessionId, targetId, opts.launch, true);
       attached.set(sessionId, a);
       a.ready = setup(a, false);
       await a.ready;
       await cdp.send('Page.navigate', { url: opts.launch }, sessionId);
     } else {
-      const pages = targetInfos.filter((t) => t.type === 'page' && t.url.includes(urlMatch));
-      if (pages.length === 0) log(`react-log: no open page matches "${urlMatch}" yet; waiting for one`);
+      // Every open tab gets the shim for its next load. A tab already running
+      // a development React started it before the shim: --reload reloads it
+      // (and any tab --url-match names), otherwise capture says so.
+      const pages = targetInfos.filter((t) => t.type === 'page');
+      let running = 0;
       for (const t of pages) {
-        const { sessionId } = await cdp.send<{ sessionId: string }>('Target.attachToTarget', { targetId: t.targetId, flatten: true });
-        const a: Attached = { sessionId, targetId: t.targetId, url: t.url, recordAll: false, session: null, ignored: new Set(), ready: Promise.resolve() };
-        attached.set(sessionId, a);
-        a.ready = setup(a, false);
-        await a.ready;
-        if (opts.reload === true) await cdp.send('Page.reload', {}, sessionId);
-        if (opts.reload !== true) log(`react-log: ${t.url} was already loaded; its React started before the shim. Reload it, or pass --reload.`);
+        try {
+          const { sessionId } = await cdp.send<{ sessionId: string }>('Target.attachToTarget', { targetId: t.targetId, flatten: true });
+          const a = attachedTo(sessionId, t.targetId, t.url, false);
+          attached.set(sessionId, a);
+          a.ready = setup(a, false);
+          await a.ready;
+          const found = await cdp
+            .send<{ result: { value?: string } }>('Runtime.evaluate', { expression: DETECT_REACT, returnByValue: true }, sessionId)
+            .then((r) => r.result.value ?? 'none')
+            .catch(() => 'none');
+          const named = urlMatch !== '' && t.url.includes(urlMatch);
+          if (found === 'development') running++;
+          if (found !== 'development' && !named) continue;
+          if (opts.reload === true) await cdp.send('Page.reload', {}, sessionId);
+          else log(`react-log: ${t.url} was already loaded; its React started before the shim. Reload it, or pass --reload.`);
+        } catch (err) {
+          log(`react-log: cannot instrument ${t.url}: ${(err as Error).message}`);
+        }
       }
+      if (running === 0) log('react-log: no open tab runs a development React yet; recording any that loads one');
     }
     // Tabs opened from now on pause until instrumented, so the shim runs
     // before any of their scripts.

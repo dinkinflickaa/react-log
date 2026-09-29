@@ -77,6 +77,27 @@ for (const version of versions) {
 `,
     );
   }
+  // The chains page in an iframe from the other loopback name: another site,
+  // so Chrome runs it out of process, as a CDP target of its own.
+  writeFileSync(
+    join(target, 'frames.html'),
+    `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <link rel="icon" href="data:," />
+    <title>react-log frames, React ${version}</title>
+  </head>
+  <body>
+    <iframe id="child" width="900" height="700"></iframe>
+    <script>
+      const host = location.hostname === 'localhost' ? '127.0.0.1' : 'localhost';
+      document.getElementById('child').src = location.protocol + '//' + host + ':' + location.port + location.pathname.replace(/frames\\.html$/, 'chains.html');
+    </script>
+  </body>
+</html>
+`,
+  );
   const kb = (statSync(join(target, 'app.js')).size / 1024).toFixed(0);
   console.log(`react-${version}  ${join('fixture/dist', `react-${version}`, 'app.js')}  ${kb} KB`);
 }

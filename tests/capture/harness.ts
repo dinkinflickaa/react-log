@@ -50,7 +50,7 @@ export interface Tab {
 
 // On the lab, a click is done when the lab's click listener has timed it;
 // on other pages, when the button's text changes.
-export function tab(cdp: CdpClient, sessionId: string, page: 'lab' | 'chains'): Tab {
+export function tab(cdp: CdpClient, sessionId: string, page: 'lab' | 'chains' | 'other'): Tab {
   // Each call gets 5 s: a navigation that swaps renderer processes can drop a
   // pending command without a reply.
   const evaluate = async <T>(expression: string): Promise<T> => {
@@ -71,7 +71,14 @@ export function tab(cdp: CdpClient, sessionId: string, page: 'lab' | 'chains'): 
   return {
     sessionId,
     eval: evaluate,
-    ready: () => poll(lab ? `window.__reactLog && window.__lab && document.querySelector('#bench-large')` : `window.__reactLog && document.querySelector('#store')`),
+    ready: () =>
+      poll(
+        lab
+          ? `window.__reactLog && window.__lab && document.querySelector('#bench-large')`
+          : page === 'chains'
+            ? `window.__reactLog && document.querySelector('#store')`
+            : `window.__reactLog && document.readyState === 'complete'`,
+      ),
     async click(selector) {
       const el = `document.querySelector(${JSON.stringify(selector)})`;
       await poll(el);
@@ -90,7 +97,7 @@ export function tab(cdp: CdpClient, sessionId: string, page: 'lab' | 'chains'): 
   };
 }
 
-export async function attachTab(cdp: CdpClient, targetId: string, page: 'lab' | 'chains'): Promise<Tab> {
+export async function attachTab(cdp: CdpClient, targetId: string, page: 'lab' | 'chains' | 'other'): Promise<Tab> {
   const { sessionId } = await cdp.send('Target.attachToTarget', { targetId, flatten: true });
   const t = tab(cdp, sessionId, page);
   await t.ready();
@@ -100,7 +107,6 @@ export async function attachTab(cdp: CdpClient, targetId: string, page: 'lab' | 
 export function configFor(root: string, name: string): CaptureConfig {
   return {
     ...DEFAULTS,
-    urlMatch: '127.0.0.1',
     launch: { chromePath: null, userDataDir: join(root, `profile-${name}`), isolate: false },
     segments: { dir: join(root, name), rotateSeconds: 2, rotateRows: 200_000 },
   };
@@ -145,7 +151,7 @@ export async function withCapture(
       if (page === undefined) await sleep(50);
     }
     targetId = page.targetId;
-    await drive(cdp, await attachTab(cdp, page.targetId, url.includes('/lab.html') ? 'lab' : 'chains'));
+    await drive(cdp, await attachTab(cdp, page.targetId, url.includes('/lab.html') ? 'lab' : url.includes('/frames.html') ? 'other' : 'chains'));
     // Binding calls reach capture on its own connection; give the last ones a moment.
     await sleep(500);
   } catch (e) {

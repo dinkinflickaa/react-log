@@ -46,7 +46,7 @@ export function install(g: any, overrides: Partial<Config> = {}): ShimApi {
   }
 
   installTracks(s);
-  installHook(s, api);
+  installHook(s);
   installObserver(s);
   installWatch(s);
   post(s, {
@@ -67,7 +67,7 @@ function refuse(s: Shim, api: ShimApi, reason: string, detail: string): void {
   post(s, { t: 'refused', reason, detail });
 }
 
-function installHook(s: Shim, api: ShimApi): void {
+function installHook(s: Shim): void {
   let nextId = 0;
   const renderers = new Map<number, unknown>();
   const hook = {
@@ -78,7 +78,7 @@ function installHook(s: Shim, api: ShimApi): void {
       const id = ++nextId;
       renderers.set(id, internals);
       try {
-        onInject(s, api, id, internals);
+        onInject(s, id, internals);
       } catch (e) {
         report(s, e);
       }
@@ -116,9 +116,13 @@ function installHook(s: Shim, api: ShimApi): void {
   Object.defineProperty(s.g, HOOK, { value: hook, configurable: true, enumerable: false, writable: true });
 }
 
-function onInject(s: Shim, api: ShimApi, id: number, internals: any): void {
+// A page can hold several Reacts (an embedded widget, a second bundle). A
+// production or unsupported one is reported and left alone; the page's
+// development Reacts are recorded all the same.
+function onInject(s: Shim, id: number, internals: any): void {
   const version = String(internals?.version ?? '');
   const line = lineFor(version);
+  const skipped = internals?.bundleType !== 1 ? 'not-a-dev-build' : line === null ? 'unsupported-react-version' : null;
   post(s, {
     t: 'renderer',
     id,
@@ -126,15 +130,9 @@ function onInject(s: Shim, api: ShimApi, id: number, internals: any): void {
     line: line?.id ?? null,
     bundleType: internals?.bundleType ?? null,
     package: internals?.rendererPackageName ?? null,
+    skipped,
   });
-  if (internals?.bundleType !== 1) {
-    refuse(s, api, 'not-a-dev-build', `React ${version} is a production or profiling build. react-log needs a development build.`);
-    return;
-  }
-  if (line === null) {
-    refuse(s, api, 'unsupported-react-version', `React ${version} is not supported. react-log supports React 18.x and 19.x.`);
-    return;
-  }
+  if (line === null || skipped !== null) return;
   const labels = typeof internals.getLaneLabelMap === 'function' ? internals.getLaneLabelMap() : null;
   const r: Renderer = { id, version, line, internals, laneLabels: labels instanceof Map ? labels : null };
   s.renderers.set(id, r);

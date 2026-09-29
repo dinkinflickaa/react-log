@@ -57,8 +57,9 @@ pnpm exec react-log --help
 # Launch a dedicated Chrome profile on the app and record until Ctrl-C
 pnpm exec react-log capture --launch http://localhost:3000/ [--headless] [--isolate]
 
-# Or attach to a Chrome started with --remote-debugging-port=9222
-pnpm exec react-log capture --cdp http://localhost:9222 --url-match localhost:3000 --reload
+# Or attach to a Chrome started with --remote-debugging-port=9222. --reload
+# reloads the open tabs already running a development React.
+pnpm exec react-log capture --cdp http://localhost:9222 --reload
 
 # While it runs: record which props changed by value for some components
 pnpm exec react-log watch SidebarItem
@@ -66,7 +67,7 @@ pnpm exec react-log watch SidebarItem
 duckdb -c "SELECT kind, count(*) FROM read_parquet('segments/*/seg-*.parquet') GROUP BY 1"
 ```
 
-Each browser tab is a session under `segments/<session_id>/`, with `session.json` and Parquet files that rotate every 10 seconds: `seg` (every event), `defs` (components), `commits` (one rollup row per commit) and `measures` (one row per interaction or configured mark pair). Capture links every row to the chain of updates that caused it (`root_update_id`) and stamps the rows inside a measure (`measure_instance_id`, `on_critical_path`). A new tab opened while capture runs is recorded too. The React DevTools extension must be off in the capture profile. `react-log.config.json` holds the defaults.
+Capture records every tab, and every iframe from another site, that loads a React 18 or 19 development build; `--url-match <text>` narrows that to URLs containing the text. A production React on a page, or a tab with none, is logged and skipped, and never stops capture. Each browser tab is a session under `segments/<session_id>/`, with `session.json` and Parquet files that rotate every 10 seconds: `seg` (every event), `defs` (components), `commits` (one rollup row per commit) and `measures` (one row per interaction or configured mark pair). Capture links every row to the chain of updates that caused it (`root_update_id`) and stamps the rows inside a measure (`measure_instance_id`, `on_critical_path`). A new tab opened while capture runs is recorded too. The React DevTools extension must be off in the capture profile. `react-log.config.json` holds the defaults.
 
 ## Reading a session
 
