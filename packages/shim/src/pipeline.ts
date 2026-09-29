@@ -53,7 +53,8 @@ function runIdle(s: Shim, deadline: IdleDeadline | null): void {
   s.idleScheduled = false;
   const t0 = now();
   const scheduling = s.g.navigator?.scheduling;
-  const inputPending = typeof scheduling?.isInputPending === 'function' ? () => scheduling.isInputPending() === true : () => false;
+  // Scrolls and drags too, not only clicks and keys.
+  const inputPending = typeof scheduling?.isInputPending === 'function' ? () => scheduling.isInputPending({ includeContinuous: true }) === true : () => false;
   let until: number;
   if (deadline !== null && !deadline.didTimeout && s.ring.count > BACKLOG) {
     // Until 2 ms before the idle period ends, and no longer than a frame;

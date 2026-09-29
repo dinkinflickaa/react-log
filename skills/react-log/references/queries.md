@@ -8,7 +8,7 @@ Load the views first in every DuckDB session, then run queries by name. Replace 
 
 The segments directory is `segments/` here. Replace it everywhere in this block if it is elsewhere (for example `tests/golden/segments/`).
 
-Sessions captured before a column was added read it as null (`memo` is the newest).
+Sessions captured before a column was added read it as null (`memo` in defs and `dropped_rows` in commits are the newest).
 
 ```sql
 CREATE OR REPLACE VIEW events AS
@@ -21,6 +21,8 @@ CREATE OR REPLACE VIEW defs AS
         SELECT * FROM read_parquet('segments/*/defs-*.parquet', union_by_name = true))
   GROUP BY component_id;
 CREATE OR REPLACE VIEW commits AS
+  SELECT NULL::INTEGER AS dropped_rows WHERE false
+  UNION ALL BY NAME
   SELECT * FROM read_parquet('segments/*/commits-*.parquet', union_by_name = true);
 CREATE OR REPLACE VIEW measures AS
   SELECT * FROM read_parquet('segments/*/measures-*.parquet', union_by_name = true);
@@ -65,7 +67,7 @@ SELECT c.commit_id, c.signature, m.name AS measure, c.on_critical_path,
        d.display_name AS producer, c.trigger_event,
        c.rendered, c.committed, c.noop, c.top_type, c.top_type_count,
        round(c.top1_share, 2) AS top1_share, round(c.noop_share, 2) AS noop_share,
-       round(c.effect_share, 2) AS effect_share
+       round(c.effect_share, 2) AS effect_share, c.dropped_rows
 FROM commits c
 LEFT JOIN defs d ON d.component_id = c.producer_component_id
 LEFT JOIN measures m ON m.measure_instance_id = c.measure_instance_id
