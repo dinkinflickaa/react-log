@@ -9,7 +9,7 @@ description: Analyze react-log capture sessions (Parquet segments under ./segmen
 
 1. `duckdb` CLI on PATH.
 2. A segments directory (default `./segments`) with at least one session.
-3. The `react-log` CLI (`pnpm exec react-log` inside the react-log repo) for `capture`, `watch`, `sessions`, `top`, `card`, `query`. Add `--segments <dir>` when the directory is not `./segments`. Everything also works with plain SQL from `references/queries.md`: load its `views` block first, then run queries by name with the placeholders filled in.
+3. The `react-log` CLI for `capture`, `watch`, `sessions`, `top`, `card`, `query`: `react-log` on PATH (after `npm link` in the react-log repo's `packages/cli`), or `pnpm exec react-log` inside the react-log repo. Run it from the app's directory, where capture writes `./segments`, and add `--segments <dir>` when the sessions are elsewhere. Everything also works with plain SQL from `references/queries.md`: load its `views` block first, then run queries by name with the placeholders filled in.
 
 ## What is in a session
 

@@ -18,6 +18,25 @@ pnpm test
 pnpm exec react-log --help
 ```
 
+## Try it on your app
+
+The app must run a React 18 or 19 development build. Once, from this repository:
+
+```sh
+(cd packages/cli && npm link)                                         # react-log on your PATH
+mkdir -p ~/.claude/skills && ln -s "$PWD/skills/react-log" ~/.claude/skills/react-log   # the skill, for Claude Code in any project
+```
+
+Then in your app's directory, with its dev server running:
+
+```sh
+react-log capture --launch http://localhost:5173/   # a new Chrome window: do the slow interaction 10 to 20 times, a second apart, then Ctrl-C
+react-log top                                       # the most expensive commits of the newest session
+react-log card <commit_id>                          # one commit explained
+```
+
+Capture writes `./segments/` there; add it to `.gitignore`. Then, in Claude Code in the same directory, ask for the react-log skill on the newest session: it explains the worst commits and either patches the code or says why not, so start on a branch.
+
 ## Capture
 
 ```sh
