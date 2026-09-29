@@ -54,7 +54,7 @@ pnpm exec react-log query "SELECT name, count(*), median(duration_ms) FROM measu
 
 ```sh
 node tests/golden/record.ts                       # re-record the golden session
-node tests/skill/findings.ts <findings.json>      # check a run: vocabulary, evidence re-executes, components exist, planted bugs classified
+node tests/skill/findings.ts <findings.json>      # check a run: vocabulary, evidence re-executes, components exist, each planted bug still present classified
 ```
 
 ## Benchmarks

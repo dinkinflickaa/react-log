@@ -126,8 +126,8 @@ function MediumTable() {
 // ---- bench-large: the benchmark's large interaction. Every item is
 // memoized, but the inline onSelect is a new function on each render, so all
 // 3,000 re-render and only the two whose selection changed commit anything.
-// The same code as Sidebar below, kept as it is: fixes land in Sidebar, and
-// this one stays the overhead benchmark's workload.
+// Sidebar below had the same code until the skill fixed it in Phase 5; this
+// copy keeps the bug on purpose as the overhead benchmark's workload.
 
 const ITEMS = range(3000).map((i) => ({ id: i, label: `item ${i}` }));
 

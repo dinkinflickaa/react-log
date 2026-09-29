@@ -60,6 +60,13 @@ describe('the findings checker', () => {
     expect(entries[4]!.problems.join()).toMatch(/not in the fix vocabulary/);
   });
 
+  test('expects a fixed bug only in a commit that still shows it', () => {
+    const [before] = run(`SELECT c.noop FROM commits c JOIN defs d ON d.component_id = c.producer_component_id WHERE d.display_name = 'Sidebar' ORDER BY c.total_ms DESC LIMIT 1`);
+    expect(PLANTED.Sidebar!.present!(before)).toBe(true);
+    // The fixed Sidebar's click, from the Phase 5 re-capture: three renders, all committed.
+    expect(PLANTED.Sidebar!.present!({ rendered: 3, committed: 3, noop: 0 })).toBe(false);
+  });
+
   test('catches more than five entries, a repeated signature, and bad order', () => {
     const six = [...good, good[0]];
     expect(checkFindings(six).problems.join()).toMatch(/6 entries/);

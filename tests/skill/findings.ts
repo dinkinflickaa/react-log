@@ -13,10 +13,13 @@ export const FIXES = ['stabilize_producer', 'narrow_input', 'memo_boundary', 'ho
 export const BAILS = ['diffuse_genuine_work', 'within_budget', 'variance_too_high', 'third_party_owned', 'necessary_io_in_effect', 'design_change'];
 
 // The lab's planted bugs (fixture/app/src/lab/Lab.jsx), by the component
-// whose state change produces the commit.
-export const PLANTED: Record<string, { button: string; verdict: string }> = {
-  // #bench-large when the golden session was recorded.
-  Sidebar: { button: '#bug-producer', verdict: 'stabilize_producer' },
+// whose state change produces the commit. A bug that has since been fixed is
+// expected only in a commit that still shows it: on the fixed lab, the same
+// commit gets whatever verdict the decision table gives it.
+export const PLANTED: Record<string, { button: string; verdict: string; present?: (commit: any) => boolean }> = {
+  // #bench-large when the golden session was recorded. Fixed in Phase 5: the
+  // bug is 3,000 memoized items re-rendering to commit nothing.
+  Sidebar: { button: '#bug-producer', verdict: 'stabilize_producer', present: (c) => c.noop >= 100 },
   ShellProvider: { button: '#bug-context', verdict: 'narrow_input' },
   Dashboard: { button: '#bug-memo', verdict: 'memo_boundary' },
   Report: { button: '#bug-hoist', verdict: 'hoist_render_work' },
@@ -108,7 +111,7 @@ export function checkFindings(findings: unknown, segments = goldenSegments): { e
     // Each planted bug lands on its expected verdict.
     const planted = commit.producer === null ? undefined : PLANTED[commit.producer];
     const verdict = fix ?? bail;
-    if (planted !== undefined && verdict !== planted.verdict) p.push(`${commit.producer} (${planted.button}) is ${planted.verdict}, not ${verdict}`);
+    if (planted !== undefined && (planted.present?.(commit) ?? true) && verdict !== planted.verdict) p.push(`${commit.producer} (${planted.button}) is ${planted.verdict}, not ${verdict}`);
     return { commit_id: commit.commit_id, producer: commit.producer, verdict, problems: p };
   });
   return { entries, problems };
