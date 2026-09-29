@@ -1,4 +1,4 @@
-import { createContext, memo, useContext, useLayoutEffect, useRef, useState } from 'react';
+import { createContext, memo, useCallback, useContext, useLayoutEffect, useRef, useState } from 'react';
 
 // The lab: benchmark interactions and planted performance bugs. Each section
 // owns its state and button, so an interaction re-renders only its section.
@@ -6,7 +6,7 @@ import { createContext, memo, useContext, useLayoutEffect, useRef, useState } fr
 //   #bench-small   SmallPanel     ~50 components, all commit
 //   #bench-medium  MediumTable    ~500 rows, reordered
 //   #bench-large   LargeList      ~3,000 items, nearly all no-op
-//   #bug-producer  Sidebar        ~3,000 items, nearly all no-op  (stabilize_producer)
+//   #bug-producer  Sidebar        ~3,000 items, 2 re-render       (stabilize_producer, fixed in Phase 5)
 //   #bug-context   ShellProvider  200 context consumers, no-op    (narrow_input)
 //   #bug-memo      Dashboard      300-bar chart re-renders, no-op (memo_boundary)
 //   #bug-hoist     Report         heavy computation in render     (hoist_render_work)
@@ -126,8 +126,8 @@ function MediumTable() {
 // ---- bench-large: the benchmark's large interaction. Every item is
 // memoized, but the inline onSelect is a new function on each render, so all
 // 3,000 re-render and only the two whose selection changed commit anything.
-// The same code as Sidebar below, kept as it is: fixes land in Sidebar, and
-// this one stays the overhead benchmark's workload.
+// Sidebar below had the same code until the skill fixed it in Phase 5; this
+// copy keeps the bug on purpose as the overhead benchmark's workload.
 
 const ITEMS = range(3000).map((i) => ({ id: i, label: `item ${i}` }));
 
@@ -155,9 +155,11 @@ function LargeList() {
   );
 }
 
-// ---- stabilize_producer: every item is memoized, but the inline onSelect is
-// a new function on each render, so all 3,000 re-render and only the two
-// whose selection changed commit anything.
+// ---- stabilize_producer, fixed by the react-log skill in Phase 5: every
+// item is memoized, and onSelect is now created once, so only the two items
+// whose selection changed re-render. Before the fix, the inline onSelect was
+// a new function on each render and all 3,000 re-rendered (LargeList above
+// still does).
 
 const SidebarItem = memo(function SidebarItem({ item, selected, onSelect }) {
   return (
@@ -169,6 +171,7 @@ const SidebarItem = memo(function SidebarItem({ item, selected, onSelect }) {
 
 function Sidebar() {
   const [selected, setSelected] = useState(0);
+  const onSelect = useCallback((id) => setSelected(id), []);
   return (
     <section>
       <button id="bug-producer" onClick={() => setSelected((s) => (s + 1) % ITEMS.length)}>
@@ -176,7 +179,7 @@ function Sidebar() {
       </button>
       <ul>
         {ITEMS.map((item) => (
-          <SidebarItem key={item.id} item={item} selected={item.id === selected} onSelect={(id) => setSelected(id)} />
+          <SidebarItem key={item.id} item={item} selected={item.id === selected} onSelect={onSelect} />
         ))}
       </ul>
     </section>
