@@ -29,18 +29,18 @@ describe('Ring', () => {
 
   test('at the end of its arrays, moves the unread records to the front and fixes up held indices', () => {
     const ring = new Ring(8);
-    const held = new Int32Array([7, 3, -1]);
+    const held = new Int32Array([6, 3, -1]);
     ring.holders.push(held);
-    fill(ring, 8);
+    // Seven records reach the end: the eighth slot is kept for commit rows.
+    fill(ring, 7);
     for (let k = 0; k < 6; k++) ring.release(ring.peek());
-    const i = ring.alloc(K_COMMIT);
-    expect(ring.dropped).toBe(0);
-    expect([ring.tail, i, ring.count]).toEqual([0, 2, 3]);
-    // Record 7 is now at 1; record 3 was already read.
-    expect([...held]).toEqual([1, -1, -1]);
-    expect(ring.t0[1]).toBe(7);
-    expect(ring.r0[1]).toEqual({ k: 7 });
-    expect(ring.r0[2]).toBeNull();
+    const i = ring.alloc(K_RENDER);
+    expect([ring.cap, ring.tail, i, ring.count]).toEqual([8, 0, 1, 2]);
+    // Record 6 is now at 0; record 3 was already read.
+    expect([...held]).toEqual([0, -1, -1]);
+    expect(ring.t0[0]).toBe(6);
+    expect(ring.r0[0]).toEqual({ k: 6 });
+    expect(ring.r0[1]).toBeNull();
   });
 
   test('drops only when the browser refuses the memory, and counts it', () => {
@@ -54,6 +54,18 @@ describe('Ring', () => {
     ring.release(ring.peek());
     expect(ring.alloc(K_COMMIT)).toBe(3);
     expect(ring.dropped).toBe(2);
+  });
+
+  test('keeps its last slots for commit rows, so one fits when the browser refuses more memory', () => {
+    const ring = new Ring(16);
+    (ring as any).resize = () => {
+      throw new RangeError('Array buffer allocation failed');
+    };
+    // Other records stop two slots short of 16.
+    expect(fill(ring, 16).filter((i) => i < 0)).toHaveLength(2);
+    expect(ring.count).toBe(14);
+    expect([ring.alloc(K_COMMIT), ring.alloc(K_COMMIT), ring.alloc(K_COMMIT)]).toEqual([14, 15, -1]);
+    expect(ring.dropped).toBe(3);
   });
 
   test('empty again, goes back to its first size', () => {

@@ -11,8 +11,10 @@
 // waiting for their commit, the last commit row), so an index held across a
 // write stays valid. The ring itself has no limit: the pipeline keeps it near
 // a high watermark by taking records synchronously (spill), and a record is
-// dropped, and counted, only when the browser refuses the memory. Once
-// empty, the ring goes back to its first size.
+// dropped, and counted, only when the browser refuses the memory. Other
+// records stop short of the last slots (up to 64), which only commit rows may
+// take: a commit's row carries its count of lost records, so a loss is never
+// silent. Once empty, the ring goes back to its first size.
 
 export const K_RENDER = 1;
 export const K_COMMIT = 2;
@@ -60,9 +62,11 @@ export class Ring {
 
   // Returns the slot to fill, or -1 when the browser refused more memory.
   alloc(kind: number): number {
-    if (this.head === this.cap && !this.makeRoom()) {
-      this.dropped++;
-      return -1;
+    while (this.head >= (kind === K_COMMIT ? this.cap : this.cap - Math.min(64, this.cap >> 3))) {
+      if (!this.makeRoom()) {
+        this.dropped++;
+        return -1;
+      }
     }
     const i = this.head++;
     this.count++;

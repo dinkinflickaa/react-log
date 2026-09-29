@@ -100,8 +100,10 @@ function runIdle(s: Shim, deadline: IdleDeadline | null): void {
   if (s.ring.count > 0 || s.outbox.length > 0) scheduleIdle(s);
 }
 
+// Not in a hidden tab, whose tasks the browser does not throttle: there the
+// idle callbacks' timeouts drain, and the spill bounds memory.
 function scheduleTask(s: Shim): void {
-  if (s.taskScheduled) return;
+  if (s.taskScheduled || s.g.document?.visibilityState === 'hidden') return;
   const MC = s.g.MessageChannel;
   if (typeof MC !== 'function') return;
   if (s.channel === null) {

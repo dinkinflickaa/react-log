@@ -84,7 +84,7 @@ function generate(dir: string, duckdb: string): void {
     SELECT '${SESSION}.1.m' || k AS measure_instance_id, '${SESSION}' AS session_id, 1::INTEGER AS page_load_id, 'click' AS name, 'event_timing' AS source,
            k::BIGINT AS interaction_id, 'button#go' AS target, (${T0} + 4 * k * ${GAP_US})::BIGINT AS ts_start, (${T0} + 4 * k * ${GAP_US} + 102000)::BIGINT AS ts_end_marker,
            (${T0} + 4 * k * ${GAP_US} + 112000)::BIGINT AS ts_end_paint, (${T0} + 4 * k * ${GAP_US} + 112000)::BIGINT AS ts_end_idle,
-           112.0 AS duration_ms, 101.8 AS on_path_ms, 0.0 AS interference_ms, 10.2 AS waiting_ms
+           112.0 AS duration_ms, 101.8 AS on_path_ms, 0.0 AS interference_ms, 10.2 AS waiting_ms, 0.0 AS capture_ms
     FROM range(1, ${COMMITS / 4 + 1}) t(k)`)}) TO '${join(dir, 'measures-00000.parquet')}' (FORMAT parquet, COMPRESSION zstd);`);
   execFileSync(duckdb, [':memory:', '-c', sql.join('\n')], { stdio: ['ignore', 'ignore', 'inherit'] });
   writeFileSync(
