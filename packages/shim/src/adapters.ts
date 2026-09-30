@@ -1,6 +1,7 @@
 import { laneClassIndex, laneClassOf } from './constants.ts';
 import { K_EFFECT_SPAN, K_LAYOUT_EFFECT, K_PASSIVE_EFFECT, K_SUSPEND, K_UPDATE, K_YIELD } from './ring.ts';
 import { recordEntry } from './observer.ts';
+import { r3, SLICE_UPDATE } from './pipeline.ts';
 import { captureStack } from './stack.ts';
 import { countSpan, currentEvent, type Fiber, newCommit, now, type Renderer, type Shim } from './state.ts';
 import { settlePassive } from './walk.ts';
@@ -20,7 +21,14 @@ function setTrigger(s: Shim, event: string): void {
 const STACK_FRAMES = 30;
 
 function stackForUpdate(s: Shim, limit: number, skip: Function): Error | null {
-  return s.updatesSinceCommit++ < s.config.stacksPerBatch ? captureStack(limit, skip) : null;
+  return s.config.updateStacks ? captureStack(limit, skip) : null;
+}
+
+// The shim's time inside an update runs inside the app's setState, so it is
+// recorded as capture's own, as the commit walk's is.
+function spent(s: Shim, t0: number): void {
+  const t1 = now();
+  if (t1 > t0) s.slices.push(r3(t0)!, r3(t1)!, SLICE_UPDATE);
 }
 
 // React 18.0 to 19.1: the scheduling-profiler hooks, installed through
@@ -61,11 +69,15 @@ export function profilingHooks(s: Shim, r: Renderer): Record<string, (...args: a
   };
   // `cut` is the hook function React called: the stack starts at its caller.
   const update = (fiber: Fiber, lane: number, method: string, cut: Function) => {
+    const t = now();
     const i = ring.alloc(K_UPDATE);
-    if (i < 0) return;
+    if (i < 0) {
+      spent(s, t);
+      return;
+    }
     const event = currentEvent(s.g);
     if (event !== null && s.pendingTrigger === null) setTrigger(s, event);
-    ring.t0[i] = now();
+    ring.t0[i] = t;
     ring.n0[i] = laneClassOf(lane, r.laneLabels);
     ring.r0[i] = fiber;
     ring.r1[i] = method;
@@ -76,6 +88,7 @@ export function profilingHooks(s: Shim, r: Renderer): Record<string, (...args: a
     // commit's cascade; the capture program links the two.
     const during = s.phase === 'commit' ? s.open : s.phase === 'passive' ? (s.pendingPassive ?? s.lastCommitted) : null;
     ring.commit[i] = during === null ? 0 : during.id;
+    spent(s, t);
   };
   const wrap =
     <A extends any[]>(fn: (...args: A) => void) =>
@@ -299,13 +312,14 @@ function onTimeStamp(s: Shim, label: string, start: number, end: number, track: 
 
 // `cut` is the console.createTask wrapper: the stack starts at React's frame.
 function onUpdateTask(s: Shim, method: string, cut: Function): void {
+  const t = now();
   const shared = s.tracksRenderer!.internals.currentDispatcherRef;
   const event = currentEvent(s.g);
   if (event !== null && s.pendingTrigger === null) setTrigger(s, event);
   if (s.pendingTasks.length >= 16) s.pendingTasks.shift();
   s.pendingTasks.push({
     method,
-    t: now(),
+    t,
     transition: shared != null && shared.T != null,
     event,
     stack: stackForUpdate(s, STACK_FRAMES, cut),
@@ -313,6 +327,7 @@ function onUpdateTask(s: Shim, method: string, cut: Function): void {
     // whether an effect enqueued this update.
     during: (s.pendingPassive ?? s.open)?.id ?? 0,
   });
+  spent(s, t);
 }
 
 // React's "Update" measure carries the updated component's name, the method

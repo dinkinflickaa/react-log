@@ -8,12 +8,14 @@ export type Fiber = any;
 export interface Config {
   // Records the ring starts with, and its high watermark: past it, capture
   // takes records synchronously at commit boundaries instead of letting the
-  // page's memory grow (each held record keeps about 250 bytes alive).
+  // page's memory grow (each held record keeps about 250 bytes alive, an
+  // update's stack about 1 KB more).
   ringSize: number;
   ringHigh: number;
   flushIntervalMs: number;
   sliceMs: number;
-  stacksPerBatch: number;
+  // Every update's stack (a setState's call site and phase), or none.
+  updateStacks: boolean;
   watch: string[];
   // Entry types to record: event, mark and long-animation-frame through a
   // PerformanceObserver, measure through the performance.measure wrapper.
@@ -25,7 +27,7 @@ export const DEFAULT_CONFIG: Config = {
   ringHigh: 250_000,
   flushIntervalMs: 250,
   sliceMs: 4,
-  stacksPerBatch: 8,
+  updateStacks: true,
   watch: [],
   observe: ['event', 'mark', 'measure', 'long-animation-frame'],
 };
@@ -129,7 +131,6 @@ export interface Shim {
   lastCommitted: Commit | null;
   pendingPassive: Commit | null;
   phase: 'idle' | 'render' | 'commit' | 'passive';
-  updatesSinceCommit: number;
   forced: Set<Fiber>;
   // Effect spans recorded before their commit was known (19.2+).
   unassignedSpans: number[];
@@ -181,7 +182,6 @@ export function createShim(g: any, config: Config): Shim {
     lastCommitted: null,
     pendingPassive: null,
     phase: 'idle',
-    updatesSinceCommit: 0,
     forced: new Set(),
     unassignedSpans: [],
     pendingTasks: [],
@@ -250,7 +250,6 @@ export function newCommit(s: Shim, renderer: number): Commit {
   };
   s.pendingTrigger = null;
   s.commits.set(c.id, c);
-  s.updatesSinceCommit = 0;
   return c;
 }
 

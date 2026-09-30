@@ -15,8 +15,9 @@ export interface CaptureConfig {
   interactions: { eventTiming: boolean };
   measures: MeasureConfig[];
   // ringHigh: records the page holds before capture takes them synchronously
-  // (about 250 bytes of page memory each).
-  record: { compositeOnly: boolean; values: boolean; stacksOn: string[]; stacksPerBatch: number; watch: string[]; ringHigh: number };
+  // (about 250 bytes of page memory each, plus about 1 KB for an update's
+  // stack until it is handed over).
+  record: { compositeOnly: boolean; values: boolean; stacksOn: string[]; watch: string[]; ringHigh: number };
   segments: { dir: string; rotateSeconds: number; rotateRows: number };
 }
 
@@ -27,7 +28,7 @@ export const DEFAULTS: CaptureConfig = {
   launch: { chromePath: null, userDataDir: '~/.react-log/profile', isolate: false },
   interactions: { eventTiming: true },
   measures: [],
-  record: { compositeOnly: true, values: false, stacksOn: ['update'], stacksPerBatch: 8, watch: [], ringHigh: 250_000 },
+  record: { compositeOnly: true, values: false, stacksOn: ['update'], watch: [], ringHigh: 250_000 },
   segments: { dir: './segments', rotateSeconds: 10, rotateRows: 200_000 },
 };
 
@@ -54,7 +55,7 @@ export function loadConfig(path?: string): CaptureConfig {
 // What the page-side shim reads from window.__reactLogConfig.
 export function shimConfig(config: CaptureConfig): object {
   return {
-    stacksPerBatch: config.record.stacksOn.includes('update') ? config.record.stacksPerBatch : 0,
+    updateStacks: config.record.stacksOn.includes('update'),
     watch: config.record.watch,
     ringHigh: config.record.ringHigh,
     observe: ['mark', 'measure', 'long-animation-frame', ...(config.interactions.eventTiming ? ['event'] : [])],

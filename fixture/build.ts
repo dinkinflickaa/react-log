@@ -38,7 +38,7 @@ for (const version of versions) {
 
   const target = join(outDir, `react-${version}`);
   await build({
-    entryPoints: { app: join(root, 'app/src/main.jsx'), lab: join(root, 'app/src/lab.jsx'), chains: join(root, 'app/src/chains.jsx'), big: join(root, 'app/src/big.jsx') },
+    entryPoints: { app: join(root, 'app/src/main.jsx'), lab: join(root, 'app/src/lab.jsx'), chains: join(root, 'app/src/chains.jsx'), big: join(root, 'app/src/big.jsx'), fanout: join(root, 'app/src/fanout.jsx') },
     outdir: target,
     bundle: true,
     format: 'iife',
@@ -60,6 +60,7 @@ for (const version of versions) {
     ['lab.html', 'lab.js', 'lab'],
     ['chains.html', 'chains.js', 'chains'],
     ['big.html', 'big.js', 'big'],
+    ['fanout.html', 'fanout.js', 'fanout'],
   ]) {
     writeFileSync(
       join(target, page!),

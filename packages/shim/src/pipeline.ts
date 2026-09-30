@@ -45,9 +45,10 @@ export function post(s: Shim, message: object): void {
 //    so the page's memory stays bounded and nothing is dropped. The page waits
 //    for it; never inside React's render, commit or effects.
 //
-// Every slice that sent rows, and every walk, is recorded ([start, end,
-// kind] in s.slices, sent with the next batch): measures count it as
-// capture's time, not the app's.
+// Every slice that sent rows, every walk, and the shim's time inside every
+// update (its stack capture) is recorded ([start, end, kind] in s.slices,
+// sent with the next batch): measures count it as capture's time, not the
+// app's.
 const BACKLOG = 2000;
 const TASK_BACKLOG = 20_000;
 const TASK_SLICE_MS = 8;
@@ -56,6 +57,7 @@ export const SLICE_IDLE = 0;
 export const SLICE_TASK = 1;
 export const SLICE_SPILL = 2;
 export const SLICE_WALK = 3;
+export const SLICE_UPDATE = 4;
 
 const sinkReady = (s: Shim) => typeof s.g.__reactLogSink === 'function';
 
@@ -203,9 +205,6 @@ function drain(s: Shim, until: number, floor = 0, committed = false): number {
   while (ring.count > floor) {
     const i = ring.peek();
     if (committed && i > s.lastCommitSlot[0]!) break;
-    // Formatting a stack can take a millisecond or more, so a slice formats
-    // at most one, as its first row.
-    if (rows.length > 0 && ring.kind[i] === K_UPDATE && ring.r2[i] != null) break;
     let row: unknown[] | null = null;
     try {
       row = serialize(s, i);

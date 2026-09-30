@@ -80,7 +80,7 @@ function gitState(): Promise<GitState> {
 }
 
 // What the shim was doing in a capture slice (pipeline.ts SLICE_*).
-const SLICE_KINDS = ['idle', 'task', 'spill', 'walk'];
+const SLICE_KINDS = ['idle', 'task', 'spill', 'walk', 'update'];
 
 // One capture session: one browser target. Turns shim messages into rows,
 // links and rolls them up per page load (rollup.ts), and hands them to the
